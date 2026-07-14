@@ -1,0 +1,13 @@
+obstacle_range: 3.0   #ロボットとの距離がobstacle_range以下のオブジェクトは障害物としてみなし、コストマップに反映する
+raytrace_range: 3.5   #ロボットとの距離がraytrace_range以下のオブジェクトが検出された場合、そのオブジェクトの内側のコストマップの障害物がクリアされる
+
+#footprint:多角形で表現 robot_radius:円で表現
+footprint: [[-0.105, -0.105], [-0.105, 0.105], [0.041, 0.105], [0.041, -0.105]]
+#robot_radius: 0.105
+
+#inflation_radius: 0.20
+#cost_scaling_factor: 3.0
+
+map_type: costmap
+observation_sources: scan
+scan: {sensor_frame: base_scan, data_type: LaserScan, topic: scan, marking: true, clearing: true}

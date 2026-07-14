@@ -1,0 +1,41 @@
+global_costmap:
+  plugins:
+    - name: static_layer
+      type: 'costmap_2d::StaticLayer'
+    - name: obstacle_layer
+      type: 'costmap_2d::ObstacleLayer'
+    - name: inflation_layer
+      type: 'costmap_2d::InflationLayer'
+  
+  global_frame: map
+  robot_base_frame: base_footprint
+
+  update_frequency: 10.0
+  publish_frequency: 10.0
+  transform_tolerance: 0.5
+
+  #static_map: true
+
+  static_layer:
+    map_topic: "map"
+    track_unknown_space: false
+    subscribe_to_updates: true
+
+  obstacle_layer:
+    observation_sources: laser
+    laser: {data_type: LaserScan, clearing: true, marking: true, topic: scan, inf_is_valid: true, raytrace_range: $(arg sensor_range), obstacle_range: $(arg sensor_range)}
+
+  inflation_layer:
+    enabled: true
+    inflation_radius: 1.0 #0.25 衝突しない (inf_rad, cost_s_f, inf_layerのコスト) を設定
+    cost_scaling_factor: 3.0  #係数を大きくすると結果のコスト値が減少 default:10
+
+#robot_radius: 0.105
+#コスト関数は、内接半径距離よりも遠く、実際の障害物から離れるインフレーション半径距離
+#よりも近いコストマップ内のすべてのセルに対して次のように計算されます。
+#exp( -1.0 * cost_scaling_factor * ( 障害物からの距離 - 内接半径 ) ) * ( 致命的コスト値 - 1 )
+#exp( -10* ( 障害物からの距離 - 内接半径 ) ) * 253
+#exp( -10* ( 障害物からの距離 - 0.105 ) ) * 253
+#障害物からの距離＝ロボット半径のとき，つまりロボットが障害物に
+#丁度当たらない距離のノードでは，inflation_layerによるコストは253
+#障害物から遠のくほど，コストは小さくなる
