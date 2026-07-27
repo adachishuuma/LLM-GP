@@ -1,4 +1,4 @@
-# Codex実装仕様書：LLM変異GP + MAP-Elites + 島モデル
+# Codex実装仕様書：LLM変異GP + ルーレット選択 + 島モデル
 
 ## 1. 目的
 
@@ -6,9 +6,11 @@ ROS/Gazeboで評価する経路計画アルゴリズムを個体として扱い�
 
 - GPによる親選択・交叉
 - LLMを用いた変異
-- MAP-Elites風アーカイブ
+- 適応度に基づくルーレット選択
 - 島ベースの母集団モデル
 - SQLiteによる全個体・評価結果・変更履歴の保存
+
+今回はDWAは変更せず、A*のみを改善対象とする。
 
 アルゴリズムの具体的な改変方法は後から決めるため、交叉、LLM変異、ROS/Gazebo評価は交換可能なインターフェースとして実装する。最初はモックでも全体ループが動作するようにする。
 
@@ -18,64 +20,78 @@ ROS/Gazeboで評価する経路計画アルゴリズムを個体として扱い�
 
 4つの島を用意する。
 
-1. `astar`
-2. `relaxed_astar`
-3. `dwa`
-4. `llm_large_mutation`
+すべての島でA*を改善対象とするが、各島は独立した母集団、乱数系列、親選択、交叉、LLM変異を持つ。
 
-各島は独立したMAP-Elitesアーカイブを持つ。
+```text
+island_1: A*母集団
+island_2: A*母集団
+island_3: A*母集団
+island_4: A*母集団
+```
+
+各島は10世代の間、他島と個体を共有せず独立に進化する。
+
+10世代ごとに、各島の最良個体を隣接島へコピーする。
 
 ---
 
-## 3. MAP-Elitesアーカイブ
+## 3. 母集団管理
 
-評価指標は次の3つ。
+MAP-Elitesのセル分類は使用しない。
 
-- 経路生成時間
-- 経路長
-- 到達時間
-
-各指標を以下の3段階に離散化する。
-
-- `good`
-- `medium`
-- `poor`
-
-よって、各島のセル数は次のとおり。
+各島は固定数の個体を保持する。
 
 ```text
-3 × 3 × 3 = 27セル
+1島あたりの母集団サイズ: 10個体
+島数: 4
+全体の保持個体数: 40個体
 ```
 
-各セルには最大1個体を保存する。
+各世代では、現在の親世代10個体と、新たに生成・評価した子個体15個体を合わせた25個体を次世代候補とする。
 
 ```text
-1島あたり最大27個体
-4島全体で最大108個体
+親世代: 10個体
+子個体: 15個体
+候補合計: 25個体
 ```
 
-セルキー例：
+次世代には次の10個体を残す。
 
-```python
-("good", "medium", "good")
+1. 候補群の最高適応度個体を1個体、エリートとして必ず保存
+2. 残り9個体を適応度比例ルーレット選択で選ぶ
+
+同一個体を複数回選択しない「重複なしルーレット選択」を基本とする。
+
+```text
+次世代10個体
+├─ エリート保存: 1個体
+└─ ルーレット選択: 9個体
 ```
 
-対象セルが空なら新個体を保存する。既存個体がいる場合は適応度を比較し、新個体の方が高い場合のみ置き換える。アーカイブに残らなかった個体もSQLiteには履歴として保存する。
+全生成個体は、次世代に残らなかった場合でもSQLiteへ保存する。
 
 ---
 
 ## 4. 初期個体
 
-各島に3個体ずつ配置する。
+初期個体はすべて現在のA*ベースラインから作成する。
+
+各島に10個体ずつ配置し、合計40個体とする。
+
+ただし、完全に同一の40コピーとして扱うのではなく、個体ID、島ID、乱数シードを別々に付与する。
+
+必要に応じて、初期ヒューリスティック重みなどにごく小さな差を設定できるようにする。
+
+例:
 
 ```text
-astar: A1, A2, A3
-relaxed_astar: R1, R2, R3
-dwa: D1, D2, D3
-llm_large_mutation: L1, L2, L3
+island_1: A1_01 ～ A1_10
+island_2: A2_01 ～ A2_10
+island_3: A3_01 ～ A3_10
+island_4: A4_01 ～ A4_10
 ```
 
-初期個体は合計12個体。すべて評価し、各島のアーカイブへ登録する。
+初期40個体をすべてROS/Gazeboまたはモック評価器で評価する。
 
 ---
 
@@ -92,30 +108,42 @@ llm_large_mutation: L1, L2, L3
 したがって、生成数は次のとおり。
 
 ```text
-1島：5組 × 3個体 = 15個体
-4島：15個体 × 4島 = 60個体/世代
+1島: 5組 × 3個体 = 15個体
+4島: 15個体 × 4島 = 60個体/世代
 ```
 
 ---
 
 ## 6. 親選択
 
-各島のアーカイブに保存されている個体からトーナメント選択で親を決める。
+各島の現在の母集団10個体から、適応度比例ルーレット選択で親を決める。
 
-初期設定：
+初期設定:
 
 ```python
-TOURNAMENT_SIZE = 3
 PARENT_PAIRS_PER_ISLAND = 5
+POPULATION_SIZE = 10
 ```
 
-処理：
+親選択の流れ:
 
-1. 島内からランダムに3個体を選択
-2. 最も適応度が高い個体を親とする
-3. これを2回行い、親1と親2を決定
-4. 可能なら同一個体同士を避ける
-5. 島内に1個体しかいない場合は同じ個体を2回使ってよい
+1. 島内10個体の適応度を取得する
+2. 適応度を非負の選択重みに変換する
+3. 重みに比例した確率で親1を選ぶ
+4. 親1を除外して親2を選ぶ
+5. 島内に1個体しかいない場合のみ同一個体を許可する
+6. 同じ個体が複数の親ペアで選ばれることは許可する
+
+適応度が0以下を含む場合に備え、選択重みは次のように補正する。
+
+```python
+epsilon = 1e-9
+min_fitness = min(ind.fitness for ind in population)
+offset = -min_fitness + epsilon if min_fitness <= 0 else 0.0
+weight = individual.fitness + offset
+```
+
+すべての重みが0に近い場合は、一様ランダム選択へフォールバックする。
 
 ---
 
@@ -133,7 +161,9 @@ Parent1 + Parent2
      Child_C
 ```
 
-`operator_type = "crossover_only"`
+```python
+operator_type = "crossover_only"
+```
 
 ### 7.2 LLM変異のみ
 
@@ -147,7 +177,9 @@ Parent1 or Parent2
      Child_M
 ```
 
-`operator_type = "mutation_only"`
+```python
+operator_type = "mutation_only"
+```
 
 ### 7.3 交叉 + LLM変異
 
@@ -163,7 +195,9 @@ Parent1 + Parent2
      Child_CM
 ```
 
-`operator_type = "crossover_and_mutation"`
+```python
+operator_type = "crossover_and_mutation"
+```
 
 3個体はすべて別個体として検証・評価・保存判定する。
 
@@ -180,8 +214,14 @@ ROS/Gazebo評価前に次を確認する。
 5. 禁止されたファイルを変更していない
 6. タイムアウトしない
 7. NaN/Infを出す危険な処理がないか簡易確認
+8. A*以外のDWA関連コードを変更していない
+9. 変更許可範囲外のファイルを変更していない
 
-無効な個体はROS/Gazeboで実行しない。失敗理由をSQLiteへ保存する。LLM修正の再試行は初期設定で1回まで。
+無効な個体はROS/Gazeboで実行しない。
+
+失敗理由はSQLiteへ保存する。
+
+LLM修正の再試行は初期設定で1回までとする。
 
 ---
 
@@ -200,13 +240,22 @@ class EvaluationResult:
     raw_log_path: str | None = None
 ```
 
-将来的には複数ゴール・複数試行を行い、平均値を使用できるようにする。
+実評価では複数ゴール・複数試行を行い、平均値を使用できるようにする。
+
+初期設定では1ゴールにつき3回以上実行する。
+
+```yaml
+evaluation:
+  repetitions_per_goal: 3
+```
 
 ---
 
 ## 10. 適応度
 
-3指標は小さいほど良い。基準値に対して正規化し、重み付き和を計算する。
+3指標は小さいほど良い。
+
+基準値に対して正規化し、重み付き和を計算する。
 
 ```python
 planning_score = max(0.0, 1.0 - planning_time / planning_reference)
@@ -220,74 +269,104 @@ fitness = (
 )
 ```
 
-初期重み：
+初期重み:
 
 ```yaml
-planning_weight: 0.33
-path_weight: 0.34
-arrival_weight: 0.33
-failure_fitness: 0.0
+fitness:
+  planning_weight: 0.33
+  path_weight: 0.34
+  arrival_weight: 0.33
+  planning_reference: 1.0
+  path_reference: 30.0
+  arrival_reference: 60.0
+  failure_fitness: 0.0
 ```
+
+評価失敗個体には`failure_fitness`を設定する。
 
 ---
 
-## 11. セル分類
+## 11. 次世代選択
 
-設定ファイルで閾値を変更可能にする。
+各島について、親10個体と子15個体を合わせた25個体から次世代10個体を選ぶ。
 
-```yaml
-bins:
-  planning_time:
-    good_max: 0.15
-    medium_max: 0.30
-  path_length:
-    good_max: 10.0
-    medium_max: 15.0
-  arrival_time:
-    good_max: 20.0
-    medium_max: 35.0
-```
+### 11.1 エリート保存
 
-分類規則：
+候補25個体の中で最も適応度が高い個体を必ず1個体保存する。
 
-```text
-value <= good_max   → good
-value <= medium_max → medium
-otherwise           → poor
-```
+同一適応度の場合は、次の優先順位で決める。
+
+1. 評価成功率が高い
+2. 到達時間が短い
+3. 経路長が短い
+4. 経路生成時間が短い
+5. 個体IDが小さい
+
+### 11.2 残り9個体
+
+エリートを除いた候補群から、適応度比例ルーレット選択を重複なしで行い、9個体を選ぶ。
+
+候補数が9個体未満の場合は、存在する個体をすべて残す。
+
+すべての適応度が同じ、または重みが0になる場合は、一様ランダム選択へフォールバックする。
 
 ---
 
 ## 12. 島間コピー
 
-5世代ごとにリング型でコピーする。
+10世代ごとにリング型でコピーする。
 
 ```text
-astar
-  ↓
-relaxed_astar
-  ↓
-dwa
-  ↓
-llm_large_mutation
-  ↓
-astar
+island_1
+   ↓
+island_2
+   ↓
+island_3
+   ↓
+island_4
+   ↓
+island_1
 ```
 
-各島から2個体をコピーする。
-
-1. 島内で最も適応度が高い個体
-2. 最良個体とは異なるセルからランダムに選んだ個体
+各島から1個体をコピーする。
 
 ```text
-2個体 × 4島 = 最大8個体/移住処理
+各島の最高適応度個体: 1個体
 ```
 
-コピー元の個体は削除しない。コピー個体には新しいIDを付け、元個体ID、コピー元島、コピー先島、世代を記録する。
+コピー元の個体は削除しない。
 
-コピー先でも通常のMAP-Elites規則を適用する。
+コピー個体には新しいIDを付け、以下を記録する。
 
-重要：全コピー元の選択を先に完了してから、コピー先へ一括登録する。同じ移住処理中に多段コピーされることを防ぐ。
+- 元個体ID
+- コピー元島
+- コピー先島
+- コピー世代
+- ソースコード
+- 評価値
+- 適応度
+- 変更履歴
+
+コピー処理は、各島の通常世代更新が完了した後に行う。
+
+コピー先では、現在の10個体とコピー個体1個体を合わせた11個体から次の10個体を選ぶ。
+
+```text
+候補11個体
+↓
+エリート1個体
++
+重複なしルーレット選択9個体
+↓
+次世代10個体
+```
+
+重要:
+
+- すべてのコピー元個体を先に確定する
+- その後、コピー先へ一括登録する
+- 同一の移住処理中に多段コピーが起きないようにする
+- コピーは10、20、30、...世代でのみ実行する
 
 ---
 
@@ -308,11 +387,13 @@ class Individual:
     path_length: float | None = None
     arrival_time: float | None = None
     fitness: float | None = None
-    cell_key: tuple[str, str, str] | None = None
 
     valid: bool = True
     evaluation_success: bool = False
     error_message: str | None = None
+
+    is_elite: bool = False
+    selected_for_next_generation: bool = False
     change_history: list[str] = field(default_factory=list)
 ```
 
@@ -322,7 +403,7 @@ class Individual:
 
 最低限、次のテーブルを作成する。
 
-### individuals
+### 14.1 individuals
 
 - individual_id
 - generation
@@ -333,9 +414,11 @@ class Individual:
 - parent_ids
 - valid
 - evaluation_success
+- is_elite
+- selected_for_next_generation
 - created_at
 
-### evaluations
+### 14.2 evaluations
 
 - individual_id
 - planning_time
@@ -347,16 +430,15 @@ class Individual:
 - raw_log_path
 - evaluated_at
 
-### archive_entries
+### 14.3 population_memberships
 
 - island_name
-- planning_time_bin
-- path_length_bin
-- arrival_time_bin
+- generation
 - individual_id
-- updated_at
+- selection_method
+- selected_at
 
-### migrations
+### 14.4 migrations
 
 - source_individual_id
 - copied_individual_id
@@ -365,7 +447,7 @@ class Individual:
 - generation
 - migrated_at
 
-### change_history
+### 14.5 change_history
 
 - individual_id
 - sequence_number
@@ -373,11 +455,21 @@ class Individual:
 - description
 - diff_text
 
+### 14.6 llm_calls
+
+- individual_id
+- model_name
+- prompt_text
+- response_text
+- success
+- error_message
+- created_at
+
 ---
 
 ## 15. インターフェース
 
-### 評価器
+### 15.1 評価器
 
 ```python
 class Evaluator(Protocol):
@@ -385,7 +477,7 @@ class Evaluator(Protocol):
         ...
 ```
 
-### 交叉
+### 15.2 交叉
 
 ```python
 class CrossoverOperator(Protocol):
@@ -397,7 +489,7 @@ class CrossoverOperator(Protocol):
         ...
 ```
 
-### LLM変異
+### 15.3 LLM変異
 
 ```python
 class MutationOperator(Protocol):
@@ -409,69 +501,67 @@ class MutationOperator(Protocol):
         ...
 ```
 
-LLM API未設定時はモック実装を使う。
-
 ---
 
-## 16. 推奨ディレクトリ構成
+## 16. LLMモデル
 
-```text
-llm_gp_framework/
-├─ README.md
-├─ pyproject.toml
-├─ config/
-│  └─ default.yaml
-├─ src/
-│  └─ llm_gp/
-│     ├─ main.py
-│     ├─ config.py
-│     ├─ models.py
-│     ├─ fitness.py
-│     ├─ bins.py
-│     ├─ database.py
-│     ├─ archive.py
-│     ├─ island.py
-│     ├─ selection.py
-│     ├─ migration.py
-│     ├─ validation.py
-│     ├─ operators/
-│     │  ├─ crossover.py
-│     │  ├─ mutation.py
-│     │  ├─ mock_crossover.py
-│     │  └─ mock_mutation.py
-│     └─ evaluators/
-│        ├─ base.py
-│        ├─ mock.py
-│        └─ ros_gazebo.py
-├─ initial_individuals/
-│  ├─ astar/
-│  ├─ relaxed_astar/
-│  ├─ dwa/
-│  └─ llm_large_mutation/
-├─ generated_individuals/
-├─ experiment_logs/
-├─ experiment_results/
-└─ tests/
-   ├─ test_bins.py
-   ├─ test_archive.py
-   ├─ test_selection.py
-   ├─ test_migration.py
-   ├─ test_fitness.py
-   └─ test_generation_loop.py
+LLM変異には`gpt-4o-mini`を使用する。
+
+OpenAI APIキーはプロジェクトルートの`.env`に保存されているものとして実装する。
+
+```env
+OPENAI_API_KEY=xxxxxxxxxxxxxxxx
+OPENAI_MODEL=gpt-4o-mini
+```
+
+環境変数の読み込みには`python-dotenv`を使用する。
+
+```python
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+api_key = os.getenv("OPENAI_API_KEY")
+model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+```
+
+初期実装では次の2種類を用意する。
+
+- `MockMutationOperator`
+- `OpenAIGPT4oMiniMutationOperator`
+
+`OpenAIGPT4oMiniMutationOperator`はOpenAI Python SDKを利用する。
+
+APIキーが存在しない場合は、警告を出してモック変異へフォールバックする。
+
+`.env`はGit管理しない。
+
+```gitignore
+.env
 ```
 
 ---
 
-## 17. 世代ループ
+## 17. ディレクトリ構成
+
+管理しやすい構成を採用する。
+
+## 18. 世代ループ
 
 ```python
 for generation in range(1, max_generations + 1):
 
     for island in islands:
+        parents = list(island.population)
+        children = []
 
         for _ in range(parent_pairs_per_island):
-            parent1 = tournament_selection(island.archive)
-            parent2 = tournament_selection(island.archive)
+            parent1 = roulette_select(parents)
+            parent2 = roulette_select(
+                parents,
+                exclude_ids={parent1.individual_id},
+            )
 
             child_c = crossover(parent1, parent2)
 
@@ -481,54 +571,85 @@ for generation in range(1, max_generations + 1):
             intermediate = crossover(parent1, parent2)
             child_cm = llm_mutation(intermediate)
 
-            children = [child_c, child_m, child_cm]
+            generated = [child_c, child_m, child_cm]
 
-            for child in children:
+            for child in generated:
                 save_individual(child)
 
                 if not validate(child):
+                    child.fitness = failure_fitness
                     save_failure(child)
+                    children.append(child)
                     continue
 
                 result = evaluator.evaluate(child)
+                child.evaluation_success = result.success
 
                 if not result.success:
                     child.fitness = failure_fitness
                     save_evaluation(child, result)
+                    children.append(child)
                     continue
 
                 child.fitness = calculate_fitness(result)
-                child.cell_key = classify_to_cell(result)
-
                 save_evaluation(child, result)
-                island.archive.try_insert(child)
+                children.append(child)
 
-    if generation % migration_interval == 0:
-        perform_ring_migration(islands)
+        candidates = parents + children
+
+        island.population = select_survivors(
+            candidates=candidates,
+            population_size=10,
+            elite_count=1,
+            method="roulette_without_replacement",
+        )
+
+        save_population_membership(
+            island=island,
+            generation=generation,
+        )
+
+    if generation % 10 == 0:
+        perform_ring_migration(
+            islands=islands,
+            generation=generation,
+            migrants_per_island=1,
+        )
 
     save_generation_summary(generation, islands)
 ```
 
 ---
 
-## 18. 設定ファイル例
+## 19. 設定ファイル例
 
 ```yaml
 evolution:
   max_generations: 50
+  population_size_per_island: 10
   parent_pairs_per_island: 5
+  elite_count: 1
+
+islands:
+  count: 4
+  names:
+    - island_1
+    - island_2
+    - island_3
+    - island_4
 
 selection:
-  method: tournament
-  tournament_size: 3
+  parent_method: roulette
+  survivor_method: roulette_without_replacement
+  epsilon: 1.0e-9
+  avoid_same_parent_pair: true
 
 migration:
-  interval: 5
-  migrants_per_island: 2
+  interval: 10
+  migrants_per_island: 1
+  migrant_selection: best
+  topology: ring
   reevaluate_migrants: false
-
-archive:
-  individuals_per_cell: 1
 
 fitness:
   planning_weight: 0.33
@@ -539,10 +660,20 @@ fitness:
   arrival_reference: 60.0
   failure_fitness: 0.0
 
+validation:
+  max_repair_attempts: 1
+  build_timeout_seconds: 180
+  forbid_dwa_changes: true
+
 evaluation:
   evaluator_type: mock
   repetitions_per_goal: 3
   timeout_seconds: 120
+
+llm:
+  provider: openai
+  model: gpt-4o-mini
+  fallback_to_mock: true
 
 database:
   path: experiment_results/evolution.db
@@ -552,26 +683,59 @@ random_seed: 42
 
 ---
 
-## 19. テスト要件
+## 20. テスト要件
 
 最低限、以下をpytestで確認する。
 
-- 空セルに個体を登録できる
-- 同一セルで高適応度個体に置換される
-- 低適応度個体では置換されない
-- 各島のアーカイブが27セルを超えない
-- 親ペア1組から3種類の子が生成される
+### 親選択
+
+- 適応度が高い個体ほど高確率で選択される
+- 適応度が低い個体にも選択確率が残る
+- 親1と親2が可能な限り異なる
+- すべての重みが0の場合に一様選択へフォールバックする
+
+### 子生成
+
+- 親ペア1組から必ず3種類の子が生成される
+- `operator_type`が正しく記録される
 - 1島1世代で15個体生成される
 - 4島1世代で60個体生成される
-- 5世代ごとにのみ島間コピーが実行される
+
+### 次世代選択
+
+- 親10個体と子15個体から10個体が選択される
+- 最高適応度個体が必ず残る
+- 残り9個体が重複なしルーレット選択される
+- 母集団サイズが常に10個体になる
+
+### 島間コピー
+
+- 10世代ごとにのみ実行される
+- 各島から最良1個体がコピーされる
 - コピー元個体が削除されない
-- コピー先でもMAP-Elites規則が適用される
-- 全生成個体がSQLiteに保存される
-- 同じ乱数シードで同じ結果になる
+- リング方向が正しい
+- 同一移住処理内で多段コピーが起きない
+- コピー後も各島10個体になる
+
+### 安全性
+
+- DWA関連コードの変更が拒否される
+- ビルド失敗個体がROS/Gazeboで実行されない
+- NaN/Infを含む評価が失敗扱いになる
+
+### DB
+
+- 全生成個体がSQLiteへ保存される
+- 次世代に残らなかった個体も履歴に残る
+- 親ID、操作種別、LLM呼び出し、移住履歴が保存される
+
+### 再現性
+
+- 同じ乱数シードとモック評価器で同じ結果になる
 
 ---
 
-## 20. 完了条件
+## 21. 完了条件
 
 以下でモック実験を実行できること。
 
@@ -579,25 +743,28 @@ random_seed: 42
 python -m llm_gp.main --config config/default.yaml
 ```
 
-実行後に確認できること：
+実行後に確認できること:
 
 - 4島が作成される
-- 初期12個体が評価される
+- 各島10個体、合計40個体の初期母集団が作成される
 - 各世代で全体60個体が生成される
 - `crossover_only`、`mutation_only`、`crossover_and_mutation`が記録される
-- 各島最大27個体を保持する
-- 5世代ごとに各島から最大2個体が隣接島へコピーされる
-- SQLiteに全個体、評価、履歴、移住情報が残る
+- 各島の母集団サイズが常に10個体になる
+- 各世代で最高適応度個体1個体が必ず残る
+- 残り9個体が重複なしルーレット選択される
+- 10世代ごとに各島の最良1個体が隣接島へコピーされる
+- DWAコードは変更されない
+- SQLiteに全個体、評価、履歴、LLM呼び出し、移住情報が残る
 - 世代統計がCSVと標準出力へ保存される
 - `pytest`が成功する
 
 ---
 
-## 21. Codexへの最終指示
+## 22. Codexへの最終指示
 
 この仕様に基づき、まずモック評価器・モック交叉・モックLLM変異で全体ループが動く完成版を実装すること。
 
-要件：
+要件:
 
 - Python 3.11以上
 - 型ヒントを使用
@@ -608,5 +775,10 @@ python -m llm_gp.main --config config/default.yaml
 - pytestを作成する
 - READMEへ実行方法を書く
 - ROS/Gazebo、LLM API、交叉処理は後から差し替え可能にする
+- A*のみを改変対象とし、DWA関連コードは変更しない
+- MAP-Elitesのセル分類は実装しない
+- 親選択と次世代選択にルーレット選択を使用する
+- 各世代でエリート1個体を必ず保存する
+- 島間コピーは10世代ごとに行う
 - 不明点は合理的な仮定を置き、モック版を先に完成させる
 - 実装後、生成ファイル一覧、実行手順、主要設計を説明する

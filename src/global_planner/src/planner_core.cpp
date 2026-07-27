@@ -49,6 +49,7 @@
 #include <global_planner/quadratic_calculator.h>
 
 #include <sensor_msgs/LaserScan.h>
+#include <std_msgs/Int32.h>
 
 // register this planner as a BaseGlobalPlanner plugin
 PLUGINLIB_EXPORT_CLASS(global_planner::GlobalPlanner,
@@ -154,6 +155,8 @@ void GlobalPlanner::initialize(std::string name, costmap_2d::Costmap2D *costmap,
         plan_pub_ = private_nh.advertise<nav_msgs::Path>("plan", 1);
         potential_pub_ =
             private_nh.advertise<nav_msgs::OccupancyGrid>("potential", 1);
+        node_expansions_pub_ =
+            private_nh.advertise<std_msgs::Int32>("node_expansions", 1);
 
         private_nh.param("allow_unknown", allow_unknown_, true);
         planner_->setHasUnknown(allow_unknown_);
@@ -337,6 +340,10 @@ bool GlobalPlanner::makePlan(const geometry_msgs::PoseStamped &start,
 
     double runtime = (ros::Time::now() - t_start).toSec();
 
+    // Publish the node-expansion count before the plan itself so subscribers
+    // that key off the first /plan message already have the freshest count.
+    publishNodeExpansions(planner_->getExpansionCount());
+
     // printf("*****ended Relaxed-Astar*****\n");//ERROR
     //  ROS_ERROR("***********\n");
     //   printf("***RUN TIME:%d***\n", runtime); //ERROR
@@ -397,6 +404,12 @@ void GlobalPlanner::publishPlan(
     }
 
     plan_pub_.publish(gui_path);
+}
+
+void GlobalPlanner::publishNodeExpansions(long expansion_count) {
+    std_msgs::Int32 message;
+    message.data = static_cast<int32_t>(expansion_count);
+    node_expansions_pub_.publish(message);
 }
 
 bool GlobalPlanner::getPlanFromPotential(

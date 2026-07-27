@@ -75,6 +75,18 @@ class Expander {
             unknown_ = unknown;
         }
 
+        /**
+         * @brief Number of nodes popped from the open list by the most recent
+         * calculatePotentials() call (the search loop's `cycle` counter).
+         * This is a noise-free proxy for search cost: unlike wall-clock
+         * planning time it does not include ROS/actionlib/message-passing
+         * overhead, so it is comparable across evolved candidates even when
+         * their runtime is dominated by fixed overhead.
+         */
+        long getExpansionCount() const {
+            return expansion_count_;
+        }
+
         void clearEndpoint(unsigned char* costs, float* potential, int gx, int gy, int s){
             int startCell = toIndex(gx, gy);
             for(int i=-s;i<=s;i++){
@@ -100,6 +112,7 @@ class Expander {
         int cells_visited_;
         float factor_;
         PotentialCalculator* p_calc_;
+        long expansion_count_ = 0; /**< nodes expanded during the last calculatePotentials() call */
 
 };
 

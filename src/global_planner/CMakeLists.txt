@@ -12,6 +12,7 @@ find_package(catkin REQUIRED
     nav_msgs
     pluginlib
     roscpp
+    std_msgs
     tf2_geometry_msgs
     tf2_ros
 )
@@ -32,6 +33,7 @@ catkin_package(
     nav_msgs
     pluginlib
     roscpp
+    std_msgs
     tf2_ros
 )
 

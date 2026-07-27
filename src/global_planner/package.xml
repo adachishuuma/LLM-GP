@@ -27,6 +27,7 @@
   <depend>navfn</depend>
   <depend>pluginlib</depend>
   <depend>roscpp</depend>
+  <depend>std_msgs</depend>
   <depend>tf2_ros</depend>
 
   <export>

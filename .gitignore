@@ -4,4 +4,8 @@ logs/
 .catkin_tools/
 .vscode/
 *.pyc
+.env
 __pycache__/
+*.egg-info/
+.test_tmp/
+experiment_results/

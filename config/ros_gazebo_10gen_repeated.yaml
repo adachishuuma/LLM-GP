@@ -1,0 +1,75 @@
+evolution:
+  # Repeated-evaluation 10-generation experiment.
+  smoke_mode: true
+  max_generations: 3
+  population_size_per_island: 2
+  parent_pairs_per_island: 1
+  elite_count: 1
+
+islands:
+  count: 4
+  names: [island_1, island_2, island_3, island_4]
+
+selection:
+  parent_method: roulette
+  survivor_method: roulette_without_replacement
+  epsilon: 1.0e-9
+  avoid_same_parent_pair: true
+
+migration:
+  interval: 10
+  migrants_per_island: 1
+  migrant_selection: best
+  topology: ring
+  reevaluate_migrants: false
+
+fitness:
+  planning_weight: 0.33
+  path_weight: 0.34
+  arrival_weight: 0.33
+  planning_reference: 1.0
+  path_reference: 30.0
+  arrival_reference: 60.0
+  failure_fitness: 0.0
+  # TODO calibrate: run scripts/repeat10_compare.py once against the
+  # baseline (ind_000001) and set this to roughly its mean node_expansions,
+  # so the score spreads out instead of saturating near 0 or 1.
+  expansion_reference: 2000.0
+
+validation:
+  max_repair_attempts: 1
+  build_timeout_seconds: 180
+  forbid_dwa_changes: true
+
+evaluation:
+  evaluator_type: ros_gazebo
+  repetitions_per_goal: 3
+  timeout_seconds: 240
+  fixed_goal: [11.775, 1.075, 0.0]
+  ros_gazebo:
+    wsl_distribution: Ubuntu-20.04
+    workspace: /home/adachi/catkin_ws_2024_12_2/catkin_ws
+    launch_file: src/dwa_local_planner/launch/astar_dwa.launch
+    package_name: global_planner
+    candidate_target: src/global_planner/src/rastar.cpp
+    robot_model: burger
+    gazebo_model_name: turtlebot3_burger
+    start_pose: [-0.0316, 0.391, 0.00638]
+    startup_timeout_seconds: 60
+    plan_topic: /move_base/GlobalPlanner/plan
+    node_expansions_topic: /move_base/GlobalPlanner/node_expansions
+
+llm:
+  provider: openai
+  model: gpt-4o-mini
+  # A mock mutation would mix a different method into the experiment.
+  fallback_to_mock: false
+
+database:
+  path: experiment_results/ten_generation_repeated/roulette_ros_10gen_repeated.db
+
+output:
+  source_directory: experiment_results/ten_generation_repeated/individual_sources
+  generation_csv: experiment_results/ten_generation_repeated/generation_summary.csv
+
+random_seed: 1042

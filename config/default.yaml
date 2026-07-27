@@ -1,0 +1,61 @@
+evolution:
+  max_generations: 50
+  population_size_per_island: 10
+  parent_pairs_per_island: 5
+  elite_count: 1
+
+islands:
+  count: 4
+  names: [island_1, island_2, island_3, island_4]
+
+selection:
+  parent_method: roulette
+  survivor_method: roulette_without_replacement
+  epsilon: 1.0e-9
+  avoid_same_parent_pair: true
+
+migration:
+  interval: 10
+  migrants_per_island: 1
+  migrant_selection: best
+  topology: ring
+  reevaluate_migrants: false
+
+fitness:
+  planning_weight: 0.33
+  path_weight: 0.34
+  arrival_weight: 0.33
+  planning_reference: 1.0
+  path_reference: 30.0
+  arrival_reference: 60.0
+  failure_fitness: 0.0
+  # Node-expansion count is what planning_weight actually scores now (see
+  # llm_gp/fitness.py). MockEvaluator samples node_expansions in [80, 3000];
+  # this reference should sit roughly mid-range so scores spread out instead
+  # of saturating at 0 or 1.
+  expansion_reference: 1500.0
+
+validation:
+  max_repair_attempts: 1
+  build_timeout_seconds: 180
+  forbid_dwa_changes: true
+
+evaluation:
+  evaluator_type: mock
+  repetitions_per_goal: 3
+  timeout_seconds: 120
+  fixed_goal: [1.69, 0.954, -0.00143]
+
+llm:
+  provider: mock
+  model: gpt-4o-mini
+  fallback_to_mock: true
+
+database:
+  path: experiment_results/roulette_evolution.db
+
+output:
+  source_directory: experiment_results/roulette_individual_sources
+  generation_csv: experiment_results/roulette_generation_summary.csv
+
+random_seed: 42

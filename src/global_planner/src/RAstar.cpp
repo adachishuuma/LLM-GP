@@ -43,90 +43,64 @@ namespace global_planner {
 RAStarExpansion::RAStarExpansion(PotentialCalculator *p_calc, int xs, int ys)
     : Expander(p_calc, xs, ys) {}
 
-double heuristic_cost(const Node& from, const Node& to) {
-    // ヒューリスティック関数の実装（仮の実装）
-    return abs(to.x - from.x) + abs(to.y - from.y);
-}
-
 bool RAStarExpansion::calculatePotentials(unsigned char *costs, double start_x,
                                           double start_y, double end_x,
                                           double end_y, int cycles,
                                           float *potential) {
-
+    queue_.clear();
     int start_i = toIndex(start_x, start_y);
-    int goal_i = toIndex(end_x, end_y);
+    queue_.push_back(RIndex(start_i, 0));
+
     std::fill(potential, potential + ns_, POT_HIGH);
     potential[start_i] = 0;
-    
-    //どっちがnx_なのか難しい
-    int rows = nx_;
-    int cols = ny_;
 
-    double tBreak = 1 + 1.0 / (rows + cols);
+    int goal_i = toIndex(end_x, end_y);
+    int cycle = 0;
+    float tBreak = 1 + 1 / (nx_ + ny_);
 
-    Node start = {start_x, start_y};
-    Node goal = {end_x, end_y};
-    openSet.insert(start);//開始地点の追加
+    while (!queue_.empty() && cycle < cycles) {
+        RIndex top = queue_[0];
+        std::pop_heap(queue_.begin(), queue_.end(), Rgreater1());
+        queue_.pop_back();
 
-    //スタート地点から座標(x, y)までの実距離
-    std::vector<std::vector<double>> gScore(rows, std::vector<double>(cols, POT_HIGH));
-    gScore[start.x][start.y] = 0;
+        int i = top.i;
+        if (i == goal_i) {
+            expansion_count_ = cycle;
+            return true;
+        }
 
-    //座標(x, y)における評価値
-    std::vector<std::vector<double>> fScore(rows, std::vector<double>(cols, POT_HIGH));
-    fScore[start.x][start.y] = heuristic_cost(start, goal);
-
-    //gptがこのコード単体で経路を構築するために追加した配列
-    //このパッケージではおそらくstd::vector<Index> queue_にノード順を格納し経路を記憶させている？
-    //queueはただ隣接ノード群を格納するためのもの
-    // std::vector<std::vector<Node>> cameFrom(rows, std::vector<Node>(cols, {-1, -1}));
-
-    //メモリエラー（無限ループ）はなくなったがnopath
-    while (!openSet.empty()) {
-        Node current = *std::min_element(openSet.begin(), openSet.end(), [&fScore](const Node& a, const Node& b) {
-            return fScore[a.x][a.y] < fScore[b.x][b.y];
-        });
-        openSet.erase(current);
-        add(&gScore, &fScore, current, -1, 0, potential, costs, tBreak, goal, &openSet);
-        add(&gScore, &fScore, current, 0, -1, potential, costs, tBreak, goal, &openSet);
-        add(&gScore, &fScore, current, 0,  1, potential, costs, tBreak, goal, &openSet);
-        add(&gScore, &fScore, current, 1,  0, potential, costs, tBreak, goal, &openSet);
+        add(costs, potential, potential[i], i + 1, end_x, end_y, tBreak, nx_);
+        add(costs, potential, potential[i], i - 1, end_x, end_y, tBreak, nx_);
+        add(costs, potential, potential[i], i + nx_, end_x, end_y, tBreak, ny_);
+        add(costs, potential, potential[i], i - nx_, end_x, end_y, tBreak, ny_);
+        cycle++;
     }
 
-    // if (gScore[goal.x][goal.y] != POT_HIGH) {
-    if (potential[goal_i] != POT_HIGH) {
-        return true;
-    } else {
-        return false;
-    }
+    // Search exhausted the open list or the cycle budget without reaching the
+    // goal; still record how many nodes were expanded so callers can tell
+    // "failed after expanding 5 nodes" from "failed after expanding 50000".
+    expansion_count_ = cycle;
+    return false;
 }
 
-void RAStarExpansion::add(std::vector<std::vector<double>> *gScore, std::vector<std::vector<double>> *fScore,
-                            Node current, int dx, int dy, float *potential, unsigned char *costs, double tBreak, Node goal, std::set<Node> *openSet){
-    double nx = current.x + dx;
-    double ny = current.y + dy;
+void RAStarExpansion::add(unsigned char *costs, float *potential,
+                          float prev_potential, int next_i, int end_x,
+                          int end_y, float tBreak, int dist) {
+    if (next_i < 0 || next_i >= ns_)
+        return;
+    if (potential[next_i] < POT_HIGH)
+        return;
+    if (costs[next_i] >= lethal_cost_ &&
+        !(unknown_ && costs[next_i] == costmap_2d::NO_INFORMATION))
+        return;
 
-    Node neighbor = {nx, ny};
-    int next_i = toIndex(neighbor.x, neighbor.y);
-    //近隣ノード追加条件
-    if (next_i < 0 || next_i >= ns_) return;
-    if (potential[next_i] < POT_HIGH) return;
-    if (costs[next_i] >= lethal_cost_ && !(unknown_ && costs[next_i] == costmap_2d::NO_INFORMATION)) return;
-    
-    double dist_edge = 1;
-    double tentativeGScore = (*gScore)[current.x][current.y] + dist_edge;
-    if (tentativeGScore < (*gScore)[neighbor.x][neighbor.y]) {
-        // (*cameFrom)[neighbor.x][neighbor.y] = current;
-        (*gScore)[neighbor.x][neighbor.y] = tentativeGScore;
+    potential[next_i] = prev_potential + neutral_cost_ + costs[next_i];
+    int x = next_i % nx_, y = next_i / nx_;
+    float distance = abs(end_x - x) + abs(end_y - y);
 
-        (*fScore)[neighbor.x][neighbor.y] = (*gScore)[neighbor.x][neighbor.y] + tBreak * heuristic_cost(neighbor, goal);
-        // (*fScore)[neighbor.x][neighbor.y] = (*gScore)[neighbor.x][neighbor.y] + tBreak * heuristic_cost(neighbor, goal) + costs[next_i]; //コスト（inflation layer）を追加
-        potential[next_i] = (*fScore)[neighbor.x][neighbor.y];
-
-        openSet->insert(neighbor);
-        ROS_INFO("%d", openSet->size());
-        
-    }
+    queue_.push_back(
+        RIndex(next_i, potential[next_i] + distance * neutral_cost_ * tBreak));
+    std::push_heap(queue_.begin(), queue_.end(), Rgreater1());
 }
 
 } // end namespace global_planner

@@ -1,11 +1,19 @@
-<!--動いた!!!でも改善の余地あり-->
+<!--
+  Harder evaluation environment: myroom_plus tiled x4 (myroom_plus_x4_v3),
+  4x the floor area and roughly double the wall/corridor count of the
+  original myroom_plus map. Use this instead of astar_dwa.launch when you
+  want search cost (node_expansions) and success-rate differences between
+  candidates to actually show up -- on the small myroom_plus map, grid A*/
+  Relaxed-A* is already close to its optimal path length and the search
+  itself is cheap enough that candidates rarely differ. See
+  config/ros_gazebo_complex_map.yaml for the matching start/goal pose.
+-->
 <launch>
   <!-- Avoid shared-memory issues on WSLg/X11 Qt apps. -->
   <env name="QT_X11_NO_MITSHM" value="1"/>
 
   <!-- Arguments -->
-  <arg name="map_file" default="$(find dwa_local_planner)/maps/myroom_plus.yaml"/>
- <!-- <arg name="map_file" default="$(find dwa_local_planner)/maps/myroom_plus_x4_v3.yaml"/>-->
+  <arg name="map_file" default="$(find dwa_local_planner)/maps/myroom_plus_x4_v3.yaml"/>
   <arg name="move_forward_only" default="false"/>
   <arg name="cmd_vel_topic" default="/cmd_vel" />
   <arg name="odom_topic" default="odom" />
@@ -13,15 +21,14 @@
 
   <!-- Gazebo -->
   <arg name="model" default="$(env TURTLEBOT3_MODEL)" doc="model type [burger, waffle, waffle_pi]"/>
-  <!-- world:-2,-0.5,0 house:5,4,0 myroom_plus start:0.025,6.875,0 goal:11.775,1.075,0
-       myroom_plus_x4/v2 start:-0.325,14.125,0 goal:23.875,1.475,0 -->
-  <arg name="x_pos" default="-0.0316"/>
-  <arg name="y_pos" default="0.391"/>
+  <!-- myroom_plus_x4_v3 start:-0.325,14.125,0 goal:23.875,1.475,0 (see astar_dwa.launch
+       for the coordinates on the smaller myroom_plus map). -->
+  <arg name="x_pos" default="-0.325"/>
+  <arg name="y_pos" default="14.125"/>
   <arg name="z_pos" default="0.0"/>
 
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
-    <arg name="world_name" value="$(find dwa_local_planner)/worlds/myroom_plus.world"/>
-    <!-- <arg name="world_name" value="$(find dwa_local_planner)/worlds/myroom_plus_x4_v3.world"/> -->
+    <arg name="world_name" value="$(find dwa_local_planner)/worlds/myroom_plus_x4_v3.world"/>
     <arg name="paused" value="false"/>
     <arg name="use_sim_time" value="true"/>
     <arg name="gui" value="false"/>
@@ -32,13 +39,6 @@
   <param name="robot_description" command="$(find xacro)/xacro --inorder $(find turtlebot3_description)/urdf/turtlebot3_$(arg model).urdf.xacro" />
 
   <node pkg="gazebo_ros" type="spawn_model" name="spawn_urdf"  args="-urdf -model turtlebot3_$(arg model) -x $(arg x_pos) -y $(arg y_pos) -z $(arg z_pos) -param robot_description" />
-
-  <!--
-  <include file="$(find turtlebot3_gazebo)/launch/turtlebot3_world.launch">
-    <<arg name="gui" value="false"/>
-    <arg name="world_name" value="$(find turtlebot3_gazebo)/worlds/turtlebot3_world.world"/>
-  </include>
--->
 
   <!-- Turtlebot3 -->
   <include file="$(find turtlebot3_bringup)/launch/turtlebot3_remote.launch">
@@ -57,15 +57,14 @@
 
   <!-- move_base -->
   <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
-  <!-- 追加箇所10.21 -->
     <param name="move_base_min" value="0"/>
     <param name="move_base_angle" value="0"/>
-    
+
     <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS" />
     <param name="base_global_planner" value="global_planner/GlobalPlanner"/>
-    
+
     <rosparam file="$(find dwa_local_planner)/param/costmap_common_params_$(arg model).yaml" command="load" ns="global_costmap" />
-    <rosparam file="$(find dwa_local_planner)/param/costmap_common_params_$(arg model).yaml" command="load" ns="local_costmap" />    
+    <rosparam file="$(find dwa_local_planner)/param/costmap_common_params_$(arg model).yaml" command="load" ns="local_costmap" />
     <rosparam file="$(find dwa_local_planner)/param2/local_costmap_params.yaml" command="load" />
     <rosparam file="$(find dwa_local_planner)/param2/global_costmap_params.yaml" command="load" />
     <rosparam file="$(find dwa_local_planner)/param/move_base_params.yaml" command="load" />
@@ -73,12 +72,11 @@
     <remap from="cmd_vel" to="$(arg cmd_vel_topic)"/>
     <remap from="odom" to="$(arg odom_topic)"/>
     <param name="DWAPlannerROS/min_vel_x" value="0.0" if="$(arg move_forward_only)" />
-    <!--global_plannerのparameter-->
+    <!-- global_planner parameters -->
     <rosparam file="$(find dwa_local_planner)/param2/global_planner_params.yaml" command="load" />
   </node>
 
   <!-- rviz -->
-  <!-- <node pkg="rviz" type="rviz" name="rviz" required="true" args="-d $(find dwa_local_planner)/rviz/turtlebot3_navigation.rviz"/> -->
   <node pkg="rviz" type="rviz" name="rviz" required="true" if="$(arg use_rviz)" args="-d $(find dwa_local_planner)/rviz/my_turtlebot3_navigation.rviz">
     <env name="LIBGL_ALWAYS_SOFTWARE" value="1"/>
   </node>

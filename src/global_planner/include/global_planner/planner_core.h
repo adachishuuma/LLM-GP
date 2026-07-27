@@ -196,6 +196,12 @@ class GlobalPlanner : public nav_core::BaseGlobalPlanner {
         ros::Publisher potential_pub_;
         int publish_scale_;
 
+        // Published once per makePlan() call, right after calculatePotentials()
+        // returns, so external tooling (e.g. the GP evaluation harness) can
+        // read the search's node-expansion count without parsing logs.
+        ros::Publisher node_expansions_pub_;
+        void publishNodeExpansions(long expansion_count);
+
         void outlineMap(unsigned char* costarr, int nx, int ny, unsigned char value);
 
         float* potential_array_;
