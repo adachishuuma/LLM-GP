@@ -1,0 +1,11 @@
+nohup: ignoring input
+Initialized 4 islands with 8 evaluated individuals; goal_x in [15.0, 16.5], goal_y in [1.5, 2.3], yaw=0.0
+evaluator=RosGazeboEvaluator; crossover=OpenAIGPT4oMiniCrossoverOperator; mutation=OpenAIGPT4oMiniMutationOperator
+generation=1 generated=12 migrations=0 populations[island_1=2, island_2=2, island_3=2, island_4=2]
+generation=2 generated=12 migrations=0 populations[island_1=2, island_2=2, island_3=2, island_4=2]
+Completed 2 generations; generated=24, migrations=0
+SQLite: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_2gen_smoke/run_20260816_105513/roulette_ros_lattice_fork_2gen_smoke.db
+CSV: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_2gen_smoke/run_20260816_105513/generation_summary.csv
+Analysis: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_2gen_smoke/run_20260816_105513/analysis/generation_algorithm_report.md
+Best algorithm: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_2gen_smoke/run_20260816_105513/analysis/best_algorithm/best_algorithm.cpp
+Run directory: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_2gen_smoke/run_20260816_105513

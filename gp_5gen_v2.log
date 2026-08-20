@@ -1,0 +1,76 @@
+nohup: ignoring input
+Traceback (most recent call last):
+  File "/home/adachi/.local/lib/python3.8/site-packages/httpx/_transports/default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "/home/adachi/.local/lib/python3.8/site-packages/httpx/_transports/default.py", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+  File "/home/adachi/.local/lib/python3.8/site-packages/httpcore/_sync/connection_pool.py", line 256, in handle_request
+    raise exc from None
+  File "/home/adachi/.local/lib/python3.8/site-packages/httpcore/_sync/connection_pool.py", line 236, in handle_request
+    response = connection.handle_request(
+  File "/home/adachi/.local/lib/python3.8/site-packages/httpcore/_sync/connection.py", line 101, in handle_request
+    raise exc
+  File "/home/adachi/.local/lib/python3.8/site-packages/httpcore/_sync/connection.py", line 78, in handle_request
+    stream = self._connect(request)
+  File "/home/adachi/.local/lib/python3.8/site-packages/httpcore/_sync/connection.py", line 124, in _connect
+    stream = self._network_backend.connect_tcp(**kwargs)
+  File "/home/adachi/.local/lib/python3.8/site-packages/httpcore/_backends/sync.py", line 215, in connect_tcp
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+  File "/usr/lib/python3.8/contextlib.py", line 131, in __exit__
+    self.gen.throw(type, value, traceback)
+  File "/home/adachi/.local/lib/python3.8/site-packages/httpcore/_exceptions.py", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.ConnectError: [Errno -3] Temporary failure in name resolution
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/adachi/.local/lib/python3.8/site-packages/openai/_base_client.py", line 982, in request
+    response = self._client.send(
+  File "/home/adachi/.local/lib/python3.8/site-packages/httpx/_client.py", line 914, in send
+    response = self._send_handling_auth(
+  File "/home/adachi/.local/lib/python3.8/site-packages/httpx/_client.py", line 942, in _send_handling_auth
+    response = self._send_handling_redirects(
+  File "/home/adachi/.local/lib/python3.8/site-packages/httpx/_client.py", line 979, in _send_handling_redirects
+    response = self._send_single_request(request)
+  File "/home/adachi/.local/lib/python3.8/site-packages/httpx/_client.py", line 1014, in _send_single_request
+    response = transport.handle_request(request)
+  File "/home/adachi/.local/lib/python3.8/site-packages/httpx/_transports/default.py", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+  File "/usr/lib/python3.8/contextlib.py", line 131, in __exit__
+    self.gen.throw(type, value, traceback)
+  File "/home/adachi/.local/lib/python3.8/site-packages/httpx/_transports/default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.ConnectError: [Errno -3] Temporary failure in name resolution
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/usr/lib/python3.8/runpy.py", line 194, in _run_module_as_main
+    return _run_code(code, main_globals, None,
+  File "/usr/lib/python3.8/runpy.py", line 87, in _run_code
+    exec(code, run_globals)
+  File "/mnt/c/Users/adachi/catkin_ws/llm_gp/main.py", line 148, in <module>
+    main()
+  File "/mnt/c/Users/adachi/catkin_ws/llm_gp/main.py", line 84, in main
+    summaries = engine.run()
+  File "/mnt/c/Users/adachi/catkin_ws/llm_gp/evolution.py", line 276, in run
+    self.run_generation(generation)
+  File "/mnt/c/Users/adachi/catkin_ws/llm_gp/evolution.py", line 222, in run_generation
+    for child in self.generate_children(island, generation):
+  File "/mnt/c/Users/adachi/catkin_ws/llm_gp/evolution.py", line 151, in generate_children
+    child_c = self.crossover.crossover(parent1, parent2)# 親1と親2を交叉させ、子個体を生成します。
+  File "/mnt/c/Users/adachi/catkin_ws/llm_gp/operators.py", line 563, in crossover
+    response = self.client.responses.create(
+  File "/home/adachi/.local/lib/python3.8/site-packages/openai/resources/responses/responses.py", line 828, in create
+    return self._post(
+  File "/home/adachi/.local/lib/python3.8/site-packages/openai/_base_client.py", line 1259, in post
+    return cast(ResponseT, self.request(cast_to, opts, stream=stream, stream_cls=stream_cls))
+  File "/home/adachi/.local/lib/python3.8/site-packages/openai/_base_client.py", line 1014, in request
+    raise APIConnectionError(request=request) from err
+openai.APIConnectionError: Connection error.
+Initialized 4 islands with 8 evaluated individuals; goal_x in [15.0, 16.5], goal_y in [1.5, 2.3], yaw=0.0
+evaluator=RosGazeboEvaluator; crossover=OpenAIGPT4oMiniCrossoverOperator; mutation=OpenAIGPT4oMiniMutationOperator
+generation=1 generated=12 migrations=0 populations[island_1=2, island_2=2, island_3=2, island_4=2]
+generation=2 generated=12 migrations=0 populations[island_1=2, island_2=2, island_3=2, island_4=2]
+generation=3 generated=12 migrations=0 populations[island_1=2, island_2=2, island_3=2, island_4=2]

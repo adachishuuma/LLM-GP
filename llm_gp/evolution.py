@@ -14,10 +14,9 @@ from .fitness import calculate_fitness
 from .models import EvaluationResult, GenerationSummary, Individual, MutationContext
 from .operators import (
     CrossoverOperator,
-    CppRelaxedAStarCrossoverOperator,
     IdFactory,
-    MockCrossoverOperator,
     MutationOperator,
+    build_crossover_operator,
     build_mutation_operator,
     initial_cpp_source,
     initial_source,
@@ -46,11 +45,20 @@ class EvolutionEngine:
             Island(name, config.random_seed + index * 100_003)# 島の名前と、その島専用の乱数シードを使って Island を作ります。
             for index, name in enumerate(config.islands)# 設定に登録されている島を順番に処理します。
         ]
-        self.crossover = crossover or (
-            CppRelaxedAStarCrossoverOperator(self.ids, config.source_directory)
-            if self.cpp_mode
-            else MockCrossoverOperator(self.ids, config.source_directory)
-        )# 外部から交叉オペレータが渡されていれば、それを使います。渡されていなければ、括弧内の処理で自動作成します。
+        self.crossover = crossover or build_crossover_operator(# 外部から交叉オペレータが渡されていれば、それを使います。渡されていなければLLMベースの交叉オペレータを自動作成します(APIキーがなければ決定論的な重み平均にフォールバック)。
+            config.llm.provider,
+            config.llm.model,
+            self.ids,
+            config.source_directory,
+            cpp_mode=self.cpp_mode,
+            max_retries=config.validation.max_repair_attempts,
+            fallback_to_mock=config.llm.fallback_to_mock,
+            fitness_settings=config.fitness,
+            validation_settings=config.validation,
+            connection_max_retries=config.llm.connection_max_retries,
+            connection_retry_base_seconds=config.llm.connection_retry_base_seconds,
+            connection_retry_max_seconds=config.llm.connection_retry_max_seconds,
+        )
         if mutation is not None:# 外部から突然変異オペレータが渡されたか確認します。
             self.mutations = {island.name: mutation for island in self.islands}# 渡された同じ突然変異オペレータを、すべての島に割り当てます。
         else:
@@ -63,6 +71,11 @@ class EvolutionEngine:
                     cpp_mode=self.cpp_mode,
                     max_retries=config.validation.max_repair_attempts,
                     fallback_to_mock=config.llm.fallback_to_mock,
+                    fitness_settings=config.fitness,
+                    validation_settings=config.validation,
+                    connection_max_retries=config.llm.connection_max_retries,
+                    connection_retry_base_seconds=config.llm.connection_retry_base_seconds,
+                    connection_retry_max_seconds=config.llm.connection_retry_max_seconds,
                 )
                 for island in self.islands
             }# 島ごとの突然変異オペレータを辞書として作成します。
@@ -90,6 +103,9 @@ class EvolutionEngine:
                 build_timeout_seconds=self.config.validation.build_timeout_seconds,# C++コードのビルドに対する制限時間を指定します。
                 log_directory=self.config.database_path.parent / "ros_logs",# ROS/Gazeboのログ保存先を指定します。
                 project_root=Path(__file__).parents[1],
+                rng=self.rng,# ゴールのランダムサンプリングに使う乱数生成器(実験全体のシードに紐づく)。
+                goal_x_range=self.config.evaluation.goal_x_range,# 設定されていればゴールxをこの範囲からランダムに選びます。
+                goal_y_range=self.config.evaluation.goal_y_range,# 設定されていればゴールyをこの範囲からランダムに選びます。
             )# ROS/Gazebo用の評価器を作成して返します。
         raise ValueError(f"Unsupported evaluator_type: {self.config.evaluation.evaluator_type}")# mock でも ros_gazebo でもない値が指定された場合、エラーにします。
 
@@ -168,8 +184,14 @@ class EvolutionEngine:
                 self.config.source_directory,
                 "crossover_and_mutation",
                 ".cpp" if self.cpp_mode else ".py",
+                # intermediate自体は未評価なので、既知の評価結果を持つ両親を
+                # フィードバック用の参照個体としてmutateへ渡します。
+                reference_individuals=(parent1, parent2),
             ),
         )
+        # mutate()は新しいIndividualを返すため、intermediate(crossoverステップ)の
+        # llm_callsを引き継がないと消えてしまう。両ステップ分を合算して保持する。
+        child_cm.llm_calls = list(intermediate.llm_calls) + list(child_cm.llm_calls)
         self._set_child_metadata(
             child_cm,
             island.name,
@@ -239,10 +261,17 @@ class EvolutionEngine:
         self._prepare_summary_csv()
         self.initialize()
         goal = self.config.evaluation.fixed_goal
+        x_range = self.config.evaluation.goal_x_range
+        y_range = self.config.evaluation.goal_y_range
+        goal_desc = (
+            f"goal_x in {list(x_range)}, goal_y in {list(y_range)}, yaw={goal.yaw}"
+            if x_range is not None and y_range is not None
+            else f"fixed_goal=[{goal.x}, {goal.y}, {goal.yaw}]"
+        )
         initial_count = len(self.islands) * self.config.evolution.population_size_per_island
         print(
             f"Initialized {len(self.islands)} islands with {initial_count} evaluated individuals; "
-            f"fixed_goal=[{goal.x}, {goal.y}, {goal.yaw}]"
+            f"{goal_desc}"
         )
         print(
             f"evaluator={type(self.evaluator).__name__}; "

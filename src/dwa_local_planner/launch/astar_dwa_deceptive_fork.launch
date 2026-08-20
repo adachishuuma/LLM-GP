@@ -1,0 +1,75 @@
+<!--
+  deceptive_fork: a brand-new, from-scratch map (not derived from
+  myroom_plus -- its dense open-bay geometry kept fighting attempts to
+  carve clean branching into it). Purpose-built room with a single fork
+  into 3 distinct, thin-walled routes (0.5m wide, 0.2m walls):
+    - TRAP:  heads straight toward the goal at first (looks like the
+             shortcut) but loops through a hidden detour -- LONGEST route.
+    - PRIZE: heads away from the goal first (looks like the long way
+             around) but is actually the SHORTEST true route.
+    - MID:   a plain, average route in between.
+  See config/ros_gazebo_deceptive_fork.yaml for start/goal.
+-->
+<launch>
+  <!-- Arguments -->
+  <arg name="map_file" default="$(find dwa_local_planner)/maps/deceptive_fork.yaml"/>
+  <arg name="move_forward_only" default="false"/>
+  <arg name="cmd_vel_topic" default="/cmd_vel" />
+  <arg name="odom_topic" default="odom" />
+
+  <!-- Gazebo -->
+  <arg name="model" default="$(env TURTLEBOT3_MODEL)" doc="model type [burger, waffle, waffle_pi]"/>
+  <!-- deceptive_fork start:-8.0,0.5,0 goal:7.0,0.5,0 -->
+  <arg name="x_pos" default="-8.0"/>
+  <arg name="y_pos" default="0.5"/>
+  <arg name="z_pos" default="0.0"/>
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(find dwa_local_planner)/worlds/deceptive_fork.world"/>
+    <arg name="paused" value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui" value="true"/>
+    <arg name="headless" value="false"/>
+    <arg name="debug" value="false"/>
+  </include>
+
+  <param name="robot_description" command="$(find xacro)/xacro --inorder $(find turtlebot3_description)/urdf/turtlebot3_$(arg model).urdf.xacro" />
+
+  <node pkg="gazebo_ros" type="spawn_model" name="spawn_urdf"  args="-urdf -model turtlebot3_$(arg model) -x $(arg x_pos) -y $(arg y_pos) -z $(arg z_pos) -param robot_description" />
+
+  <!-- Turtlebot3 -->
+  <include file="$(find turtlebot3_bringup)/launch/turtlebot3_remote.launch">
+    <arg name="model" value="$(arg model)" />
+  </include>
+
+  <!-- Map server -->
+  <node pkg="map_server" name="map_server" type="map_server" args="$(arg map_file)"/>
+
+  <!-- AMCL -->
+  <include file="$(find turtlebot3_navigation)/launch/amcl.launch"/>
+
+  <!-- move_base -->
+  <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+    <param name="move_base_min" value="0"/>
+    <param name="move_base_angle" value="0"/>
+
+    <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS" />
+    <param name="base_global_planner" value="global_planner/GlobalPlanner"/>
+
+    <rosparam file="$(find dwa_local_planner)/param/costmap_common_params_$(arg model).yaml" command="load" ns="global_costmap" />
+    <rosparam file="$(find dwa_local_planner)/param/costmap_common_params_$(arg model).yaml" command="load" ns="local_costmap" />
+    <rosparam file="$(find dwa_local_planner)/param2/local_costmap_params.yaml" command="load" />
+    <rosparam file="$(find dwa_local_planner)/param2/global_costmap_params.yaml" command="load" />
+    <rosparam file="$(find dwa_local_planner)/param/move_base_params.yaml" command="load" />
+    <rosparam file="$(find dwa_local_planner)/param/dwa_local_planner_params_$(arg model).yaml" command="load" />
+    <remap from="cmd_vel" to="$(arg cmd_vel_topic)"/>
+    <remap from="odom" to="$(arg odom_topic)"/>
+    <param name="DWAPlannerROS/min_vel_x" value="0.0" if="$(arg move_forward_only)" />
+    <!--global_plannerのparameter-->
+    <rosparam file="$(find dwa_local_planner)/param2/global_planner_params.yaml" command="load" />
+  </node>
+
+  <!-- rviz -->
+  <node pkg="rviz" type="rviz" name="rviz" required="true" args="-d $(find dwa_local_planner)/rviz/my_turtlebot3_navigation.rviz"/>
+
+</launch>

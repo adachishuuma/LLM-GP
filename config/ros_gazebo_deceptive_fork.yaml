@@ -1,0 +1,79 @@
+evolution:
+  # Pilot run on deceptive_fork -- a brand-new, from-scratch map (the
+  # myroom_plus-derived maps kept fighting attempts at clean branching
+  # because of their dense open-bay geometry). Single fork into 3
+  # distinct routes: TRAP looks like the shortcut but is the longest
+  # (loops through a hidden detour), PRIZE looks like the long way around
+  # but is the shortest true route, MID is a plain average route.
+  smoke_mode: true
+  max_generations: 10
+  population_size_per_island: 2
+  parent_pairs_per_island: 1
+  elite_count: 1
+
+islands:
+  count: 4
+  names: [island_1, island_2, island_3, island_4]
+
+selection:
+  parent_method: roulette
+  survivor_method: roulette_without_replacement
+  epsilon: 1.0e-9
+  avoid_same_parent_pair: true
+
+migration:
+  interval: 10
+  migrants_per_island: 1
+  migrant_selection: best
+  topology: ring
+  reevaluate_migrants: false
+
+fitness:
+  planning_weight: 0.33
+  path_weight: 0.34
+  arrival_weight: 0.33
+  planning_reference: 1.0
+  path_reference: 20.0
+  arrival_reference: 60.0
+  failure_fitness: 0.0
+  # TODO calibrate: run scripts/repeat10_compare.py once against the
+  # baseline (ind_000001) on this map and set this to roughly its mean
+  # node_expansions.
+  expansion_reference: 1500.0
+
+validation:
+  max_repair_attempts: 1
+  build_timeout_seconds: 180
+  forbid_dwa_changes: true
+
+evaluation:
+  evaluator_type: ros_gazebo
+  repetitions_per_goal: 3
+  timeout_seconds: 150
+  fixed_goal: [7.0, 0.5, 0.0]
+  ros_gazebo:
+    wsl_distribution: Ubuntu-20.04
+    workspace: /home/adachi/catkin_ws_2024_12_2/catkin_ws
+    launch_file: src/dwa_local_planner/launch/astar_dwa_deceptive_fork.launch
+    package_name: global_planner
+    candidate_target: src/global_planner/src/rastar.cpp
+    robot_model: burger
+    gazebo_model_name: turtlebot3_burger
+    start_pose: [-8.0, 0.5, 0.0]
+    startup_timeout_seconds: 60
+    plan_topic: /move_base/GlobalPlanner/plan
+    node_expansions_topic: /move_base/GlobalPlanner/node_expansions
+
+llm:
+  provider: openai
+  model: gpt-4o-mini
+  fallback_to_mock: true
+
+database:
+  path: experiment_results/deceptive_fork/roulette_ros_deceptive_fork.db
+
+output:
+  source_directory: experiment_results/deceptive_fork/individual_sources
+  generation_csv: experiment_results/deceptive_fork/generation_summary.csv
+
+random_seed: 42

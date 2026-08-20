@@ -162,6 +162,8 @@ def main() -> int:
                 arrival_time=arrival_time,
                 node_expansions=first_node_expansions,
                 error_message=f"move_base did not succeed: {state_name}",
+                goal_x=gx,
+                goal_y=gy,
             )
             return 1
         if first_plan_at is None or initial_path_length is None:
@@ -174,6 +176,8 @@ def main() -> int:
             arrival_time=arrival_time,
             node_expansions=first_node_expansions,
             error_message=None,
+            goal_x=gx,
+            goal_y=gy,
         )
         return 0
     except Exception as exc:
@@ -185,6 +189,8 @@ def main() -> int:
             arrival_time=None,
             node_expansions=None,
             error_message=str(exc),
+            goal_x=args.goal[0],
+            goal_y=args.goal[1],
         )
         return 2
 

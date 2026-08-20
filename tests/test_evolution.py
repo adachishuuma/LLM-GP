@@ -43,7 +43,25 @@ def test_initial_40_and_generation_60_keep_four_populations_of_10(
         assert summary.migrations == 0
         assert database.count("individuals") == 100
         assert database.count("evaluations") == 100
-        assert database.count("llm_calls") == 40
+        # crossover_only (20, now LLM-shaped via MockCrossoverOperator too) +
+        # mutation_only (20) + crossover_and_mutation (20 individuals x 2
+        # calls each: one for the crossover merge, one for the subsequent
+        # mutation) = 20 + 20 + 40 = 80.
+        assert database.count("llm_calls") == 80
+        llm_calls_by_operator = dict(
+            database.connection.execute(
+                """
+                SELECT i.operator_type, COUNT(*)
+                FROM llm_calls c JOIN individuals i USING(individual_id)
+                GROUP BY i.operator_type
+                """
+            ).fetchall()
+        )
+        assert llm_calls_by_operator == {
+            "crossover_only": 20,
+            "mutation_only": 20,
+            "crossover_and_mutation": 40,
+        }
         assert all(size == 10 for size in summary.population_sizes.values())
         assert all(len(island.population) == 10 for island in engine.islands)
         assert all(sum(item.is_elite for item in island.population) == 1 for island in engine.islands)

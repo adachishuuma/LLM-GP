@@ -1,0 +1,42 @@
+<!--
+  SLAM run for the new "bunki" map: spawns the robot in worlds/bunki.world
+  and runs gmapping so it can be driven around with teleop to build
+  maps/bunki.pgm + maps/bunki.yaml via `rosrun map_server map_saver`.
+-->
+<launch>
+  <env name="QT_X11_NO_MITSHM" value="1"/>
+
+  <arg name="model" default="$(env TURTLEBOT3_MODEL)" doc="model type [burger, waffle, waffle_pi]"/>
+  <!-- spawn at the S point used by myroom_plus (config/ros_gazebo.yaml start_pose) -->
+  <arg name="x_pos" default="-2.0"/>
+  <arg name="y_pos" default="-0.5"/>
+  <arg name="z_pos" default="0.0"/>
+  <arg name="use_rviz" default="true"/>
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(find dwa_local_planner)/worlds/bunki.world"/>
+    <arg name="paused" value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui" value="false"/>
+    <arg name="headless" value="false"/>
+    <arg name="debug" value="false"/>
+  </include>
+
+  <param name="robot_description" command="$(find xacro)/xacro --inorder $(find turtlebot3_description)/urdf/turtlebot3_$(arg model).urdf.xacro" />
+
+  <node pkg="gazebo_ros" type="spawn_model" name="spawn_urdf" args="-urdf -model turtlebot3_$(arg model) -x $(arg x_pos) -y $(arg y_pos) -z $(arg z_pos) -param robot_description" />
+
+  <include file="$(find turtlebot3_bringup)/launch/turtlebot3_remote.launch">
+    <arg name="model" value="$(arg model)" />
+  </include>
+
+  <!-- gmapping SLAM -->
+  <include file="$(find turtlebot3_slam)/launch/turtlebot3_gmapping.launch">
+    <arg name="model" value="$(arg model)"/>
+  </include>
+
+  <node pkg="rviz" type="rviz" name="rviz" required="true" if="$(arg use_rviz)" args="-d $(find turtlebot3_slam)/rviz/turtlebot3_gmapping.rviz">
+    <env name="LIBGL_ALWAYS_SOFTWARE" value="1"/>
+  </node>
+
+</launch>

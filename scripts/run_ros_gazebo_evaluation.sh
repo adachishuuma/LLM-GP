@@ -59,8 +59,25 @@ stop_launch() {
   launch_pid=""
 }
 
+reap_stray_ros_gazebo() {
+  # Belt-and-suspenders on top of stop_launch's process-group kill: Gazebo
+  # plugins/gzserver have been observed to survive it (e.g. if a child
+  # detaches into its own session), and those zombies pile up across a long
+  # --repetitions batch until later repetitions can't even start ROS/Gazebo
+  # within startup_timeout_seconds. ros_gazebo_run_lock serializes every
+  # evaluation project-wide, so nothing legitimate should be using these
+  # processes at this point -- a name-based sweep is safe.
+  pkill -9 -f 'gzserver' 2>/dev/null || true
+  pkill -9 -f 'gzclient' 2>/dev/null || true
+  pkill -9 -f 'roslaunch' 2>/dev/null || true
+  pkill -9 -f 'rosmaster' 2>/dev/null || true
+  pkill -9 -f 'rosout' 2>/dev/null || true
+  return 0
+}
+
 restore_source() {
   stop_launch
+  reap_stray_ros_gazebo
   if [[ -s "$backup_source" ]]; then
     cp "$backup_source" "$target_source"
     cd "$workspace" || return

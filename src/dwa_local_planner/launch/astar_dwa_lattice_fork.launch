@@ -1,0 +1,97 @@
+<!--
+  lattice_fork: extends deceptive_fork2 with multiple branch points
+  instead of a single fork at the start. 3 horizontal lanes (upper,
+  middle, lower) are linked by 3 vertical "rung" corridors along the
+  route, so the robot can switch lanes more than once. The middle lane
+  has its own hidden loop partway through, so the true shortest path
+  has to leave the middle lane (up to the upper lane, or down to the
+  lower lane) to avoid it, then rejoin the middle lane to reach the
+  goal (verified via BFS to actually weave this way).
+  Corridor width widened to a uniform ~2.0m (was a nominal 1.0m that,
+  combined with default costmap inflation, left most of the corridor
+  at near-lethal cost). map/world regenerated together from the same
+  skeletonized centerline so they stay pixel-consistent.
+  See config/ros_gazebo_lattice_fork.yaml for start/goal.
+-->
+<launch>
+  <!-- Avoid shared-memory issues on WSLg/X11 Qt apps. -->
+  <env name="QT_X11_NO_MITSHM" value="1"/>
+
+  <!-- Arguments -->
+  <arg name="map_file" default="$(find dwa_local_planner)/maps/lattice_fork.yaml"/>
+  <arg name="move_forward_only" default="false"/>
+  <arg name="cmd_vel_topic" default="/cmd_vel" />
+  <arg name="odom_topic" default="odom" />
+  <arg name="use_rviz" default="true" />
+
+  <!-- Gazebo -->
+  <arg name="model" default="$(env TURTLEBOT3_MODEL)" doc="model type [burger, waffle, waffle_pi]"/>
+  <!-- lattice_fork start:-11.8,2.0,-0.00143 goal:16.5,2.0,0 -->
+  <arg name="x_pos" default="-11.8"/>
+  <arg name="y_pos" default="2.0"/>
+  <arg name="z_pos" default="0.0"/>
+  <arg name="yaw_pos" default="-0.00143"/>
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(find dwa_local_planner)/worlds/lattice_fork.world"/>
+    <arg name="paused" value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui" value="false"/>
+    <arg name="headless" value="false"/>
+    <arg name="debug" value="false"/>
+  </include>
+
+  <param name="robot_description" command="$(find xacro)/xacro --inorder $(find turtlebot3_description)/urdf/turtlebot3_$(arg model).urdf.xacro" />
+
+  <node pkg="gazebo_ros" type="spawn_model" name="spawn_urdf"  args="-urdf -model turtlebot3_$(arg model) -x $(arg x_pos) -y $(arg y_pos) -z $(arg z_pos) -Y $(arg yaw_pos) -param robot_description" />
+
+  <!-- Turtlebot3 -->
+  <include file="$(find turtlebot3_bringup)/launch/turtlebot3_remote.launch">
+    <arg name="model" value="$(arg model)" />
+  </include>
+
+  <!-- Map server -->
+  <node pkg="map_server" name="map_server" type="map_server" args="$(arg map_file)"/>
+
+  <!-- AMCL -->
+  <!-- Tight initial covariance: the lattice_fork corridors are wide,
+       straight and repeated in parallel lanes, so a loosely-trusted
+       initial guess lets the particle filter drift onto a lookalike
+       lane/segment instead of converging on the true (known) start
+       pose. -->
+  <include file="$(find turtlebot3_navigation)/launch/amcl.launch">
+    <arg name="initial_pose_x" value="$(arg x_pos)"/>
+    <arg name="initial_pose_y" value="$(arg y_pos)"/>
+    <arg name="initial_pose_a" value="$(arg yaw_pos)"/>
+    <arg name="initial_cov_xx" value="0.05"/>
+    <arg name="initial_cov_yy" value="0.05"/>
+    <arg name="initial_cov_aa" value="0.02"/>
+  </include>
+
+  <!-- move_base -->
+  <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+    <param name="move_base_min" value="0"/>
+    <param name="move_base_angle" value="0"/>
+
+    <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS" />
+    <param name="base_global_planner" value="global_planner/GlobalPlanner"/>
+
+    <rosparam file="$(find dwa_local_planner)/param/costmap_common_params_$(arg model).yaml" command="load" ns="global_costmap" />
+    <rosparam file="$(find dwa_local_planner)/param/costmap_common_params_$(arg model).yaml" command="load" ns="local_costmap" />
+    <rosparam file="$(find dwa_local_planner)/param2/local_costmap_params.yaml" command="load" />
+    <rosparam file="$(find dwa_local_planner)/param2/global_costmap_params.yaml" command="load" />
+    <rosparam file="$(find dwa_local_planner)/param/move_base_params.yaml" command="load" />
+    <rosparam file="$(find dwa_local_planner)/param/dwa_local_planner_params_$(arg model).yaml" command="load" />
+    <remap from="cmd_vel" to="$(arg cmd_vel_topic)"/>
+    <remap from="odom" to="$(arg odom_topic)"/>
+    <param name="DWAPlannerROS/min_vel_x" value="0.0" if="$(arg move_forward_only)" />
+    <!--global_plannerのparameter-->
+    <rosparam file="$(find dwa_local_planner)/param2/global_planner_params.yaml" command="load" />
+  </node>
+
+  <!-- rviz -->
+  <node pkg="rviz" type="rviz" name="rviz" required="true" if="$(arg use_rviz)" args="-d $(find dwa_local_planner)/rviz/my_turtlebot3_navigation.rviz">
+    <env name="LIBGL_ALWAYS_SOFTWARE" value="1"/>
+  </node>
+
+</launch>

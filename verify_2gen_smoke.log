@@ -1,0 +1,21 @@
+Run: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_2gen_smoke/run_20260816_105513
+Initial baseline : ind_000006 (gen 0, fitness=0.119697, source=ind_000001.cpp)
+Overall best     : ind_000037 (gen 2, fitness=0.161397, source=ind_000037.cpp)
+
+Evaluating initial_ind_000006 x10 ...
+  -> 10/10 repetitions succeeded (100%); partial means: planning=0.0224 path=39.8213 arrival=178.0243 node_expansions=42318
+  -> strict (all-10-must-succeed) result: success=True fitness=0.065699
+Evaluating best_ind_000037 x10 ...
+  -> 10/10 repetitions succeeded (100%); partial means: planning=0.0207 path=39.9561 arrival=176.8208 node_expansions=31834
+  -> strict (all-10-must-succeed) result: success=True fitness=0.143452
+
+Wrote /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_2gen_smoke/run_20260816_105513/analysis/repeat10_statistics.csv
+Wrote /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_2gen_smoke/run_20260816_105513/analysis/repeat10_significance.csv
+
+metric              initial_mean     best_mean  rel.improve %   p-value  sig@.05
+planning_time             0.0224        0.0207           7.57    0.2947    False
+path_length              39.8213       39.9561          -0.34    0.6605    False
+arrival_time            178.0243      176.8208           0.68    0.3399    False
+node_expansions       42318.5000    31834.1000          24.77    0.0000     True
+
+rel.improve % is (initial - best) / initial * 100: positive means the best candidate is lower/better. p-value is a two-sided permutation test on the two repeated-evaluation samples (exact when feasible, else a seeded 20000-iteration Monte Carlo estimate); it answers 'could this gap plausibly be run-to-run Gazebo noise?', not 'is the effect large'.

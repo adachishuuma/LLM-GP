@@ -71,6 +71,12 @@ class MutationContext:
     source_directory: Path
     operator_type: str = "mutation_only"
     source_suffix: str = ".py"
+    # Evaluated individuals to report metrics from when the thing actually
+    # being mutated has no evaluation of its own yet (crossover_and_mutation:
+    # the crossover intermediate is unevaluated, so its two parents are
+    # passed here instead). Unused for mutation_only, where the individual
+    # being mutated is itself already evaluated.
+    reference_individuals: tuple[Individual, ...] = field(default_factory=tuple)
 
 
 @dataclass

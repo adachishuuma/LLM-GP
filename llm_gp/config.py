@@ -81,6 +81,11 @@ class EvaluationSettings:
     timeout_seconds: int
     fixed_goal: GoalPose
     ros_gazebo: RosGazeboSettings | None = None
+    # When set, each repetition samples a fresh goal x/y uniformly from these
+    # ranges (yaw stays fixed_goal.yaw) instead of always using fixed_goal.
+    # Tests that the evolved planner reaches a target zone, not one exact point.
+    goal_x_range: tuple[float, float] | None = None
+    goal_y_range: tuple[float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -88,6 +93,18 @@ class ValidationSettings:
     max_repair_attempts: int
     build_timeout_seconds: int
     forbid_dwa_changes: bool
+    # Gate LLM-generated mutation/crossover output through
+    # validate_meaningful_change() (see llm_gp/validation.py) so an edit that
+    # only touches comments/whitespace or swaps a known trivial-equivalent
+    # token pair (e.g. push_back<->emplace_back) is rejected and retried,
+    # instead of silently accepted as if it were a real algorithm change.
+    require_meaningful_change: bool = True
+    min_change_ratio: float = 0.005
+    # If every retry still fails validate_meaningful_change (but is
+    # otherwise valid C++), fall back to a small deterministic jitter of
+    # kLlmGpHeuristicWeight rather than discarding the attempt outright, so
+    # the individual still carries *some* real numeric change.
+    jitter_fallback_on_trivial_change: bool = True
 
 
 @dataclass(frozen=True)
@@ -95,6 +112,15 @@ class LLMSettings:
     provider: str
     model: str
     fallback_to_mock: bool
+    # Resilience for the OpenAI API calls mutation/crossover make during a
+    # multi-hour unattended run. Only transient failures (connection errors,
+    # timeouts, rate limits, 5xx) are retried, with exponential backoff from
+    # connection_retry_base_seconds up to connection_retry_max_seconds; other
+    # errors (bad API key, invalid request, ...) are never retried since
+    # retrying can't fix them. See operators.py's _create_response_with_retry.
+    connection_max_retries: int = 8
+    connection_retry_base_seconds: float = 15.0
+    connection_retry_max_seconds: float = 300.0
 
 
 @dataclass(frozen=True)
@@ -142,6 +168,8 @@ def load_config(path: str | Path) -> AppConfig:
             timeout_seconds=int(evaluation["timeout_seconds"]),
             fixed_goal=GoalPose(*map(float, fixed_goal)),
             ros_gazebo=_load_ros_gazebo(evaluation.get("ros_gazebo"), root),
+            goal_x_range=_load_range(evaluation.get("goal_x_range")),
+            goal_y_range=_load_range(evaluation.get("goal_y_range")),
         ),
         llm=LLMSettings(**raw["llm"]),
         database_path=database_path,
@@ -187,6 +215,14 @@ def _validate_config(config: AppConfig) -> None:
         raise ValueError("Only best-individual ring migration is supported")
     if config.validation.max_repair_attempts < 0:
         raise ValueError("max_repair_attempts must be non-negative")
+    if not (0.0 < config.validation.min_change_ratio < 1.0):
+        raise ValueError("validation.min_change_ratio must be between 0 and 1 (exclusive)")
+    if config.llm.connection_max_retries < 0:
+        raise ValueError("llm.connection_max_retries must be non-negative")
+    if not (0.0 < config.llm.connection_retry_base_seconds <= config.llm.connection_retry_max_seconds):
+        raise ValueError(
+            "llm.connection_retry_base_seconds must be positive and at most connection_retry_max_seconds"
+        )
     minimum_repetitions = 1 if config.evolution.smoke_mode else 3
     if config.evaluation.repetitions_per_goal < minimum_repetitions:
         raise ValueError(
@@ -196,6 +232,8 @@ def _validate_config(config: AppConfig) -> None:
         raise ValueError("fixed_goal must contain finite x, y, and yaw values")
     if config.evaluation.evaluator_type == "ros_gazebo" and config.evaluation.ros_gazebo is None:
         raise ValueError("evaluation.ros_gazebo is required for the ROS/Gazebo evaluator")
+    if (config.evaluation.goal_x_range is None) != (config.evaluation.goal_y_range is None):
+        raise ValueError("goal_x_range and goal_y_range must be set together")
 
 
 def _load_ros_gazebo(raw: dict[str, Any] | None, root: Path) -> RosGazeboSettings | None:
@@ -220,6 +258,15 @@ def _load_ros_gazebo(raw: dict[str, Any] | None, root: Path) -> RosGazeboSetting
             raw.get("node_expansions_topic") or _default_node_expansions_topic(plan_topic)
         ),
     )
+
+
+def _load_range(raw: list[float] | None) -> tuple[float, float] | None:
+    if raw is None:
+        return None
+    low, high = (float(raw[0]), float(raw[1]))
+    if not (math.isfinite(low) and math.isfinite(high)) or low > high:
+        raise ValueError(f"Invalid range {raw}: expected [min, max] with min <= max")
+    return (low, high)
 
 
 def _default_node_expansions_topic(plan_topic: str) -> str:

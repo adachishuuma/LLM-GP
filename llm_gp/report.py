@@ -34,11 +34,17 @@ class ResultRow:
     source_sha256: str | None
 
 
-def generate_report(database_path: Path, output_directory: Path) -> dict[str, Path]:
-    if not database_path.is_file():
-        raise FileNotFoundError(database_path)
-    output_directory.mkdir(parents=True, exist_ok=True)
-    rows = _load_rows(database_path)
+def select_baseline_and_best(
+    rows: list[ResultRow],
+) -> tuple[ResultRow, ResultRow | None]:
+    """The generation-0 fittest successful individual (falling back to the
+    fittest generation-0 row at all if none succeeded), and the fittest
+    successful individual across the whole run (None if nothing succeeded).
+
+    Used both for the generation report below and for the optional
+    initial-vs-best repeated-evaluation check run after a GP experiment
+    (see llm_gp/main.py and llm_gp/verification.py).
+    """
     successful = [row for row in rows if row.success and row.fitness is not None]
     initial_all = [row for row in rows if row.generation == 0]
     if not initial_all:
@@ -46,14 +52,26 @@ def generate_report(database_path: Path, output_directory: Path) -> dict[str, Pa
     initial_successful = [row for row in successful if row.generation == 0]
     baseline_pool = initial_successful or initial_all
     baseline_best = max(baseline_pool, key=lambda row: row.fitness or 0.0)
+    experiment_best = (
+        max(successful, key=lambda row: row.fitness or 0.0) if successful else None
+    )
+    return baseline_best, experiment_best
+
+
+def generate_report(database_path: Path, output_directory: Path) -> dict[str, Path]:
+    if not database_path.is_file():
+        raise FileNotFoundError(database_path)
+    output_directory.mkdir(parents=True, exist_ok=True)
+    rows = load_rows(database_path)
+    baseline_best, experiment_best = select_baseline_and_best(rows)
+    successful = [row for row in rows if row.success and row.fitness is not None]
+    initial_successful = [row for row in successful if row.generation == 0]
     baseline_average = (
         sum(row.fitness or 0.0 for row in initial_successful) / len(initial_successful)
         if initial_successful else None
     )
     baseline_source = _read_source(baseline_best.source_path)
-    experiment_best = (
-        max(successful, key=lambda row: row.fitness or 0.0) if successful else None
-    )
+    initial_all = [row for row in rows if row.generation == 0]
 
     individual_csv = output_directory / "individual_comparison.csv"
     _write_individual_csv(individual_csv, rows)
@@ -140,7 +158,7 @@ def generate_report(database_path: Path, output_directory: Path) -> dict[str, Pa
     return outputs
 
 
-def _load_rows(database_path: Path) -> list[ResultRow]:
+def load_rows(database_path: Path) -> list[ResultRow]:
     connection = sqlite3.connect(database_path)
     records = connection.execute("""
         SELECT i.individual_id, i.generation, i.current_island, i.operator_type,

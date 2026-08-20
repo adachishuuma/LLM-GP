@@ -1,0 +1,72 @@
+<!--
+  myroom_plus_inroom_branch3: same idea as _branch2, tidied further --
+  the leftover stub of the original corridor is now fully capped right at
+  the junction (no dangling open dead-end), and the 3 aisle width was
+  changed to 7px (0.35m) to match the one genuine designed-width
+  reference in the original map (the doorway gap at col337/rows104-110).
+  Room, start, and goal are all unchanged from myroom_plus.
+  See config/ros_gazebo_myroom_inroom_branch3.yaml.
+-->
+<launch>
+  <!-- Arguments -->
+  <arg name="map_file" default="$(find dwa_local_planner)/maps/myroom_plus_inroom_branch3.yaml"/>
+  <arg name="move_forward_only" default="false"/>
+  <arg name="cmd_vel_topic" default="/cmd_vel" />
+  <arg name="odom_topic" default="odom" />
+
+  <!-- Gazebo -->
+  <arg name="model" default="$(env TURTLEBOT3_MODEL)" doc="model type [burger, waffle, waffle_pi]"/>
+  <!-- myroom_plus_inroom_branch3 start:0.0,6.85,0 goal(unchanged from myroom_plus):11.8,1.05,0 -->
+  <arg name="x_pos" default="0.0"/>
+  <arg name="y_pos" default="6.85"/>
+  <arg name="z_pos" default="0.0"/>
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(find dwa_local_planner)/worlds/myroom_plus_inroom_branch3.world"/>
+    <arg name="paused" value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui" value="true"/>
+    <arg name="headless" value="false"/>
+    <arg name="debug" value="false"/>
+  </include>
+
+  <param name="robot_description" command="$(find xacro)/xacro --inorder $(find turtlebot3_description)/urdf/turtlebot3_$(arg model).urdf.xacro" />
+
+  <node pkg="gazebo_ros" type="spawn_model" name="spawn_urdf"  args="-urdf -model turtlebot3_$(arg model) -x $(arg x_pos) -y $(arg y_pos) -z $(arg z_pos) -param robot_description" />
+
+  <!-- Turtlebot3 -->
+  <include file="$(find turtlebot3_bringup)/launch/turtlebot3_remote.launch">
+    <arg name="model" value="$(arg model)" />
+  </include>
+
+  <!-- Map server -->
+  <node pkg="map_server" name="map_server" type="map_server" args="$(arg map_file)"/>
+
+  <!-- AMCL -->
+  <include file="$(find turtlebot3_navigation)/launch/amcl.launch"/>
+
+  <!-- move_base -->
+  <node pkg="move_base" type="move_base" respawn="false" name="move_base" output="screen">
+    <param name="move_base_min" value="0"/>
+    <param name="move_base_angle" value="0"/>
+
+    <param name="base_local_planner" value="dwa_local_planner/DWAPlannerROS" />
+    <param name="base_global_planner" value="global_planner/GlobalPlanner"/>
+
+    <rosparam file="$(find dwa_local_planner)/param/costmap_common_params_$(arg model).yaml" command="load" ns="global_costmap" />
+    <rosparam file="$(find dwa_local_planner)/param/costmap_common_params_$(arg model).yaml" command="load" ns="local_costmap" />
+    <rosparam file="$(find dwa_local_planner)/param2/local_costmap_params.yaml" command="load" />
+    <rosparam file="$(find dwa_local_planner)/param2/global_costmap_params.yaml" command="load" />
+    <rosparam file="$(find dwa_local_planner)/param/move_base_params.yaml" command="load" />
+    <rosparam file="$(find dwa_local_planner)/param/dwa_local_planner_params_$(arg model).yaml" command="load" />
+    <remap from="cmd_vel" to="$(arg cmd_vel_topic)"/>
+    <remap from="odom" to="$(arg odom_topic)"/>
+    <param name="DWAPlannerROS/min_vel_x" value="0.0" if="$(arg move_forward_only)" />
+    <!--global_plannerのparameter-->
+    <rosparam file="$(find dwa_local_planner)/param2/global_planner_params.yaml" command="load" />
+  </node>
+
+  <!-- rviz -->
+  <node pkg="rviz" type="rviz" name="rviz" required="true" args="-d $(find dwa_local_planner)/rviz/my_turtlebot3_navigation.rviz"/>
+
+</launch>

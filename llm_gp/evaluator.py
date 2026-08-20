@@ -60,6 +60,9 @@ class RosGazeboEvaluator:
         build_timeout_seconds: int,
         log_directory: Path,
         project_root: Path,
+        rng: random.Random | None = None,
+        goal_x_range: tuple[float, float] | None = None,
+        goal_y_range: tuple[float, float] | None = None,
     ) -> None:
         self.settings = settings
         self.fixed_goal = fixed_goal
@@ -69,6 +72,16 @@ class RosGazeboEvaluator:
         self.log_directory = log_directory
         self.runner_script = project_root / "scripts" / "run_ros_gazebo_evaluation.sh"
         self.trial_script = project_root / "scripts" / "ros_gazebo_trial.py"
+        self.rng = rng or random.Random()
+        self.goal_x_range = goal_x_range
+        self.goal_y_range = goal_y_range
+
+    def _sample_goal(self) -> GoalPose:
+        if self.goal_x_range is None or self.goal_y_range is None:
+            return self.fixed_goal
+        x = self.rng.uniform(*self.goal_x_range)
+        y = self.rng.uniform(*self.goal_y_range)
+        return GoalPose(x, y, self.fixed_goal.yaw)
 
     def evaluate(self, individual: Individual) -> EvaluationResult:
         self.log_directory.mkdir(parents=True, exist_ok=True)
@@ -77,7 +90,8 @@ class RosGazeboEvaluator:
             output_path = self.log_directory / (
                 f"{individual.individual_id}_repetition_{repetition + 1}.json"
             )
-            command = self._build_command(individual, output_path)
+            goal = self._sample_goal()
+            command = self._build_command(individual, output_path, goal)
             results.append(self._evaluate_once(command, output_path))
 
         successful = [result for result in results if result.success]
@@ -158,7 +172,9 @@ class RosGazeboEvaluator:
             node_expansions=_optional_float(payload.get("node_expansions")),
         )
 
-    def _build_command(self, individual: Individual, output_path: Path) -> list[str]:
+    def _build_command(
+        self, individual: Individual, output_path: Path, goal: GoalPose
+    ) -> list[str]:
         command = []
         if os.name == "nt":
             command.extend(
@@ -181,9 +197,9 @@ class RosGazeboEvaluator:
                 str(self.settings.start_pose.x),
                 str(self.settings.start_pose.y),
                 str(self.settings.start_pose.yaw),
-                str(self.fixed_goal.x),
-                str(self.fixed_goal.y),
-                str(self.fixed_goal.yaw),
+                str(goal.x),
+                str(goal.y),
+                str(goal.yaw),
                 str(self.timeout_seconds),
                 str(self.settings.startup_timeout_seconds),
                 self.settings.plan_topic,
@@ -191,6 +207,31 @@ class RosGazeboEvaluator:
             ]
         )
         return command
+
+
+def cleanup_stray_ros_gazebo_processes(
+    settings: RosGazeboSettings, project_root: Path
+) -> None:
+    """Force-kill any leftover gzserver/gzclient/roslaunch/rosmaster processes.
+
+    Each individual evaluation already self-cleans via
+    scripts/run_ros_gazebo_evaluation.sh's own exit trap, but that has been
+    observed to occasionally miss a detached child; call this once after a
+    whole batch of evaluations (a GP run, or a repeat-N comparison) finishes
+    as a final sweep. Best-effort: failures here should never fail the run
+    that just completed.
+    """
+    script = project_root / "scripts" / "cleanup_ros_gazebo.sh"
+    command: list[str] = []
+    if os.name == "nt":
+        command.extend(["wsl.exe", "-d", settings.wsl_distribution, "--", "bash"])
+    else:
+        command.append("bash")
+    command.append(_to_wsl_path(script))
+    try:
+        subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
 
 
 def _optional_float(value: object) -> float | None:

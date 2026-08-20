@@ -1,0 +1,88 @@
+evolution:
+  # 10-generation variant of the lattice_fork pilot (see
+  # ros_gazebo_lattice_fork.yaml for the full map/route description, and
+  # ros_gazebo_lattice_fork_5gen.yaml for the 5-generation run this extends).
+  # Same map, same 3-repetition averaging, just twice as many generations.
+  smoke_mode: true
+  max_generations: 10
+  population_size_per_island: 2
+  parent_pairs_per_island: 1
+  elite_count: 1
+
+islands:
+  count: 4
+  names: [island_1, island_2, island_3, island_4]
+
+selection:
+  parent_method: roulette
+  survivor_method: roulette_without_replacement
+  epsilon: 1.0e-9
+  avoid_same_parent_pair: true
+
+migration:
+  # interval is fixed at 10 by config validation. With 10 generations this
+  # now actually triggers once, at generation 10 (unlike the 5-generation run).
+  interval: 10
+  migrants_per_island: 1
+  migrant_selection: best
+  topology: ring
+  reevaluate_migrants: false
+
+fitness:
+  # Calibrated from run_20260811_065434's individual_comparison.csv (88
+  # evaluated individuals) plus a post-rebuild sanity re-check of ind_000008:
+  # successful evaluations on this map cluster around node_expansions
+  # 37.5k-49k (baseline ~42.5k), arrival_time 172-183s (timeout=200s), and
+  # path_length 38.5-40.8m. The 5-generation run's references (expansion=2500,
+  # arrival=60) were 15-20x too strict and left cost_score/arrival_score
+  # saturated at 0 for every individual, so fitness was driven almost
+  # entirely by the razor-thin path_length spread around path_reference=40.
+  planning_weight: 0.33
+  path_weight: 0.34
+  arrival_weight: 0.33
+  planning_reference: 1.0
+  path_reference: 41.0
+  arrival_reference: 200.0
+  failure_fitness: 0.0
+  expansion_reference: 45000.0
+
+validation:
+  max_repair_attempts: 1
+  build_timeout_seconds: 180
+  forbid_dwa_changes: true
+
+evaluation:
+  evaluator_type: ros_gazebo
+  repetitions_per_goal: 3
+  timeout_seconds: 200
+  fixed_goal: [16.5, 2.0, 0.0]
+  # Each repetition samples a fresh goal x/y uniformly from these ranges
+  # instead of always the exact fixed_goal point above (yaw stays 0.0).
+  goal_x_range: [15.0, 16.5]
+  goal_y_range: [1.5, 2.3]
+  ros_gazebo:
+    wsl_distribution: Ubuntu-20.04
+    workspace: /home/adachi/catkin_ws_2024_12_2/catkin_ws
+    launch_file: src/dwa_local_planner/launch/astar_dwa_lattice_fork.launch
+    package_name: global_planner
+    candidate_target: src/global_planner/src/rastar.cpp
+    robot_model: burger
+    gazebo_model_name: turtlebot3_burger
+    start_pose: [-11.8, 2.0, -0.00143]
+    startup_timeout_seconds: 60
+    plan_topic: /move_base/GlobalPlanner/plan
+    node_expansions_topic: /move_base/GlobalPlanner/node_expansions
+
+llm:
+  provider: openai
+  model: gpt-4o-mini
+  fallback_to_mock: true
+
+database:
+  path: experiment_results/lattice_fork_10gen/roulette_ros_lattice_fork_10gen.db
+
+output:
+  source_directory: experiment_results/lattice_fork_10gen/individual_sources
+  generation_csv: experiment_results/lattice_fork_10gen/generation_summary.csv
+
+random_seed: 42

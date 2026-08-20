@@ -1,0 +1,38 @@
+nohup: ignoring input
+Initialized 4 islands with 8 evaluated individuals; goal_x in [15.0, 16.5], goal_y in [1.5, 2.3], yaw=0.0
+evaluator=RosGazeboEvaluator; crossover=CppRelaxedAStarCrossoverOperator; mutation=OpenAIGPT4oMiniMutationOperator
+generation=1 generated=12 migrations=0 populations[island_1=2, island_2=2, island_3=2, island_4=2]
+generation=2 generated=12 migrations=0 populations[island_1=2, island_2=2, island_3=2, island_4=2]
+generation=3 generated=12 migrations=0 populations[island_1=2, island_2=2, island_3=2, island_4=2]
+generation=4 generated=12 migrations=0 populations[island_1=2, island_2=2, island_3=2, island_4=2]
+generation=5 generated=12 migrations=0 populations[island_1=2, island_2=2, island_3=2, island_4=2]
+generation=6 generated=12 migrations=0 populations[island_1=2, island_2=2, island_3=2, island_4=2]
+generation=7 generated=12 migrations=0 populations[island_1=2, island_2=2, island_3=2, island_4=2]
+generation=8 generated=12 migrations=0 populations[island_1=2, island_2=2, island_3=2, island_4=2]
+generation=9 generated=12 migrations=0 populations[island_1=2, island_2=2, island_3=2, island_4=2]
+generation=10 generated=12 migrations=4 populations[island_1=2, island_2=2, island_3=2, island_4=2]
+
+Verifying generational gain x10 each: initial ind_000005 (gen 0, fitness=0.105910) vs best ind_000150 (gen 9, fitness=0.122661)
+Evaluating initial_ind_000005 x10 ...
+  -> 9/10 repetitions succeeded (90%); partial means: planning=0.0213 path=39.0067 arrival=174.4197 node_expansions=40941
+  -> strict (all-10-must-succeed) result: success=False fitness=0.000000
+Evaluating best_ind_000150 x10 ...
+  -> 10/10 repetitions succeeded (100%); partial means: planning=0.1015 path=39.9494 arrival=178.3682 node_expansions=41472
+  -> strict (all-10-must-succeed) result: success=True fitness=0.070274
+
+Wrote /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_10gen/run_20260815_111026/analysis/repeat10_statistics.csv
+Wrote /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_10gen/run_20260815_111026/analysis/repeat10_significance.csv
+
+metric              initial_mean     best_mean  rel.improve %   p-value  sig@.05
+planning_time             0.0213        0.1015        -375.58    0.6829    False
+path_length              39.0067       39.9494          -2.42    0.0617    False
+arrival_time            174.4197      178.3682          -2.26    0.0703    False
+node_expansions       40940.5556    41472.4000          -1.30    0.7289    False
+
+rel.improve % is (initial - best) / initial * 100: positive means the best candidate is lower/better. p-value is a two-sided permutation test on the two repeated-evaluation samples (exact when feasible, else a seeded 20000-iteration Monte Carlo estimate); it answers 'could this gap plausibly be run-to-run Gazebo noise?', not 'is the effect large'.
+Completed 10 generations; generated=120, migrations=4
+SQLite: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_10gen/run_20260815_111026/roulette_ros_lattice_fork_10gen.db
+CSV: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_10gen/run_20260815_111026/generation_summary.csv
+Analysis: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_10gen/run_20260815_111026/analysis/generation_algorithm_report.md
+Best algorithm: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_10gen/run_20260815_111026/analysis/best_algorithm/best_algorithm.cpp
+Run directory: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_10gen/run_20260815_111026
