@@ -4,11 +4,13 @@ import json
 import os
 import random
 import subprocess
+import threading
 from pathlib import Path
 from typing import Protocol
 
 from .config import RosGazeboSettings
 from .models import EvaluationResult, GoalPose, Individual
+from .workspace_pool import WorkspacePool
 
 
 class Evaluator(Protocol):
@@ -73,26 +75,42 @@ class RosGazeboEvaluator:
         self.runner_script = project_root / "scripts" / "run_ros_gazebo_evaluation.sh"
         self.trial_script = project_root / "scripts" / "ros_gazebo_trial.py"
         self.rng = rng or random.Random()
+        # random.Random isn't safe to call concurrently from multiple threads
+        # without external synchronization; evaluate() may now run in a
+        # worker thread (see workspace_pool below), so _sample_goal() must
+        # serialize its access to self.rng.
+        self._rng_lock = threading.Lock()
         self.goal_x_range = goal_x_range
         self.goal_y_range = goal_y_range
+        # [workspace, *additional_workspaces]: independent catkin workspaces
+        # that let multiple evaluate() calls run concurrently (each candidate
+        # is built into its own workspace's rastar.cpp) instead of racing on
+        # a single shared one. A single-entry pool (the default) makes every
+        # evaluate() call block until the previous one releases it, i.e. the
+        # same fully-serialized behavior as before this existed.
+        self.workspace_pool = WorkspacePool(
+            [settings.workspace, *settings.additional_workspaces]
+        )
 
     def _sample_goal(self) -> GoalPose:
         if self.goal_x_range is None or self.goal_y_range is None:
             return self.fixed_goal
-        x = self.rng.uniform(*self.goal_x_range)
-        y = self.rng.uniform(*self.goal_y_range)
+        with self._rng_lock:
+            x = self.rng.uniform(*self.goal_x_range)
+            y = self.rng.uniform(*self.goal_y_range)
         return GoalPose(x, y, self.fixed_goal.yaw)
 
     def evaluate(self, individual: Individual) -> EvaluationResult:
         self.log_directory.mkdir(parents=True, exist_ok=True)
         results: list[EvaluationResult] = []
-        for repetition in range(self.repetitions):
-            output_path = self.log_directory / (
-                f"{individual.individual_id}_repetition_{repetition + 1}.json"
-            )
-            goal = self._sample_goal()
-            command = self._build_command(individual, output_path, goal)
-            results.append(self._evaluate_once(command, output_path))
+        with self.workspace_pool.lease() as workspace:
+            for repetition in range(self.repetitions):
+                output_path = self.log_directory / (
+                    f"{individual.individual_id}_repetition_{repetition + 1}.json"
+                )
+                goal = self._sample_goal()
+                command = self._build_command(individual, output_path, goal, workspace)
+                results.append(self._evaluate_once(command, output_path))
 
         successful = [result for result in results if result.success]
         raw_log_path = str(
@@ -173,7 +191,7 @@ class RosGazeboEvaluator:
         )
 
     def _build_command(
-        self, individual: Individual, output_path: Path, goal: GoalPose
+        self, individual: Individual, output_path: Path, goal: GoalPose, workspace: str
     ) -> list[str]:
         command = []
         if os.name == "nt":
@@ -185,7 +203,7 @@ class RosGazeboEvaluator:
         command.extend(
             [
                 _to_wsl_path(self.runner_script),
-                self.settings.workspace,
+                workspace,
                 _to_wsl_path(Path(individual.source_path)),
                 self.settings.candidate_target,
                 self.settings.package_name,

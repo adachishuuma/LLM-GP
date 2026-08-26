@@ -166,6 +166,20 @@ class ExperimentDatabase:
             ),
         )
 
+    def update_evaluation_fitness(self, individual_id: str, fitness: float | None) -> None:
+        """Fitness is now normalized against a whole generation's min/max
+        (see EvolutionEngine._score_individuals), so a surviving parent's
+        fitness can change every generation it is re-compared in, even
+        though its own raw metrics (already recorded by save_evaluation)
+        never change. Call this after rescoring a parent so its evaluations
+        row reflects the value actually used for that generation's
+        selection, instead of staying frozen at whatever it was when first
+        evaluated."""
+        self.connection.execute(
+            "UPDATE evaluations SET fitness = ? WHERE individual_id = ?",
+            (fitness, individual_id),
+        )
+
     def save_population_membership(
         self, island_name: str, generation: int, individual: Individual
     ) -> None:

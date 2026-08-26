@@ -72,6 +72,13 @@ class RosGazeboSettings:
     # Published by GlobalPlanner as std_msgs/Int32 right after each
     # calculatePotentials() call (see planner_core.cpp publishNodeExpansions).
     node_expansions_topic: str = ""
+    # Extra catkin workspaces (independent clones of `workspace`, see
+    # scripts/setup_parallel_workspaces.sh) that let RosGazeboEvaluator run
+    # multiple evaluations concurrently instead of serializing every
+    # candidate through the same rastar.cpp. [workspace, *additional_workspaces]
+    # forms the pool; empty here means the pool has exactly one slot and
+    # everything behaves exactly as it did before this field existed.
+    additional_workspaces: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -187,8 +194,8 @@ def load_config(path: str | Path) -> AppConfig:
 
 
 def _validate_config(config: AppConfig) -> None:
-    if len(config.islands) != 4 or len(set(config.islands)) != 4:
-        raise ValueError("Exactly four unique islands are required")
+    if len(config.islands) < 1 or len(set(config.islands)) != len(config.islands):
+        raise ValueError("At least one unique island is required")
     if config.evolution.smoke_mode:
         if config.evolution.population_size_per_island < 1:
             raise ValueError("smoke population_size_per_island must be positive")
@@ -234,6 +241,18 @@ def _validate_config(config: AppConfig) -> None:
         raise ValueError("evaluation.ros_gazebo is required for the ROS/Gazebo evaluator")
     if (config.evaluation.goal_x_range is None) != (config.evaluation.goal_y_range is None):
         raise ValueError("goal_x_range and goal_y_range must be set together")
+    if config.evaluation.ros_gazebo is not None:
+        settings = config.evaluation.ros_gazebo
+        effective_workspaces = (settings.workspace, *settings.additional_workspaces)
+        if len(set(effective_workspaces)) != len(effective_workspaces):
+            # Two pool entries pointing at the same directory would let two
+            # concurrent evaluations "acquire" what is physically the same
+            # workspace at once, silently defeating WorkspacePool's mutual
+            # exclusion and re-introducing the rastar.cpp race it exists to
+            # prevent -- fail fast instead of racing intermittently later.
+            raise ValueError(
+                "evaluation.ros_gazebo.workspace and additional_workspaces must all be distinct paths"
+            )
 
 
 def _load_ros_gazebo(raw: dict[str, Any] | None, root: Path) -> RosGazeboSettings | None:
@@ -257,6 +276,7 @@ def _load_ros_gazebo(raw: dict[str, Any] | None, root: Path) -> RosGazeboSetting
         node_expansions_topic=str(
             raw.get("node_expansions_topic") or _default_node_expansions_topic(plan_topic)
         ),
+        additional_workspaces=tuple(str(item) for item in (raw.get("additional_workspaces") or ())),
     )
 
 

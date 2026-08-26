@@ -16,7 +16,7 @@ from pathlib import Path
 
 from .config import AppConfig
 from .evaluator import RosGazeboEvaluator
-from .fitness import calculate_fitness
+from .fitness import calculate_fitness, compute_generation_stats
 from .models import Individual
 from .stats import permutation_test_p_value, relative_improvement_percent
 
@@ -144,7 +144,7 @@ def run_comparison(
 
     candidates = [(initial_label, initial_source), (best_label, best_source)]
 
-    rows = []
+    evaluations = []
     for log_id, source_path in candidates:
         individual = Individual(
             individual_id=log_id,
@@ -157,6 +157,15 @@ def run_comparison(
         )
         print(f"Evaluating {log_id} x{repetitions} ...", flush=True)
         result = evaluator.evaluate(individual)
+        evaluations.append((log_id, result))
+
+    # Fitness is normalized against the min/max of this initial-vs-best pair
+    # (the same rule the GP itself uses per generation), rather than against
+    # fixed reference constants.
+    stats = compute_generation_stats([result for _, result in evaluations])
+
+    rows = []
+    for log_id, result in evaluations:
         # evaluator.evaluate() requires every repetition to succeed before it
         # reports success=True at all (matching how the GP's own fitness
         # function scores individuals) -- so a single bad repetition makes
@@ -164,7 +173,7 @@ def run_comparison(
         # repetitions actually produced good data. summarize() below reads
         # each repetition's own JSON independently and is not subject to
         # that all-or-nothing collapse, so print its partial-success view too.
-        fitness = calculate_fitness(result, config.fitness)
+        fitness = calculate_fitness(result, config.fitness, stats)
         row = summarize(log_directory, log_id)
         attempted = row["attempted_repetitions"] or 0
         succeeded = row["successful_repetitions"] or 0

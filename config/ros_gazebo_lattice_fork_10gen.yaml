@@ -72,6 +72,14 @@ evaluation:
     startup_timeout_seconds: 60
     plan_topic: /move_base/GlobalPlanner/plan
     node_expansions_topic: /move_base/GlobalPlanner/node_expansions
+    # Independent clones of `workspace`, one per extra island, so all 4
+    # islands can be evaluated concurrently instead of serializing every
+    # candidate through a single shared rastar.cpp. Create these once with:
+    #   bash scripts/setup_parallel_workspaces.sh /home/adachi/catkin_ws_2024_12_2/catkin_ws 3
+    additional_workspaces:
+      - /home/adachi/catkin_ws_2024_12_2/catkin_ws_worker1
+      - /home/adachi/catkin_ws_2024_12_2/catkin_ws_worker2
+      - /home/adachi/catkin_ws_2024_12_2/catkin_ws_worker3
 
 llm:
   provider: openai

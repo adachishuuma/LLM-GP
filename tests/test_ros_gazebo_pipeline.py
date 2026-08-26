@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import random
+import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -8,8 +10,9 @@ import pytest
 
 from llm_gp.config import AppConfig, load_config
 from llm_gp.database import ExperimentDatabase
+from llm_gp.evaluator import RosGazeboEvaluator
 from llm_gp.evolution import EvolutionEngine
-from llm_gp.models import EvaluationResult, Individual, MutationContext
+from llm_gp.models import EvaluationResult, GoalPose, Individual, MutationContext
 from llm_gp.operators import (
     CppRelaxedAStarCrossoverOperator,
     CppRelaxedAStarMutationOperator,
@@ -153,6 +156,104 @@ def test_real_mode_initializes_cpp_candidates_without_calling_ros(tmp_path: Path
             for item in island.population
         )
     finally:
+        database.close()
+
+
+def test_build_command_uses_leased_workspace_not_settings_workspace(tmp_path: Path) -> None:
+    """_build_command must use the workspace argument (leased from the pool)
+    rather than settings.workspace directly, otherwise every concurrent
+    evaluation would race on the same catkin workspace regardless of
+    WorkspacePool."""
+    config = ros_config(tmp_path)
+    settings = config.evaluation.ros_gazebo
+    assert settings is not None
+    evaluator = RosGazeboEvaluator(
+        settings=settings,
+        fixed_goal=config.evaluation.fixed_goal,
+        timeout_seconds=1,
+        repetitions=1,
+        build_timeout_seconds=1,
+        log_directory=tmp_path / "logs",
+        project_root=Path(__file__).parents[1],
+    )
+    individual = Individual(
+        "ind1", 0, "island_1", "island_1", str(tmp_path / "candidate.cpp"), [], "initial"
+    )
+    command = evaluator._build_command(
+        individual, tmp_path / "out.json", GoalPose(1.0, 2.0, 0.0), "/home/adachi/other_workspace"
+    )
+    assert "/home/adachi/other_workspace" in command
+    assert settings.workspace not in command
+
+
+class ConcurrencyTrackingEvaluator:
+    """Fake evaluator that records the high-water mark of concurrently active
+    evaluate() calls, to verify EvolutionEngine actually dispatches to
+    multiple worker threads instead of only claiming to."""
+
+    def __init__(self, delay: float = 0.05) -> None:
+        self.delay = delay
+        self._lock = threading.Lock()
+        self._current = 0
+        self.max_concurrent = 0
+
+    def evaluate(self, individual: Individual) -> EvaluationResult:
+        with self._lock:
+            self._current += 1
+            self.max_concurrent = max(self.max_concurrent, self._current)
+        time.sleep(self.delay)
+        with self._lock:
+            self._current -= 1
+        return EvaluationResult(True, 0.1, 8.0, 15.0)
+
+
+def _mini_config_with_additional_workspaces(
+    tmp_path: Path, additional_workspaces: tuple[str, ...]
+) -> AppConfig:
+    root = Path(__file__).parents[1]
+    base = load_config(root / "config" / "ros_gazebo_mini.yaml")
+    settings = base.evaluation.ros_gazebo
+    assert settings is not None
+    return replace(
+        base,
+        database_path=tmp_path / "ros_mini.db",
+        source_directory=tmp_path / "cpp_sources",
+        generation_csv=tmp_path / "ros_mini_summary.csv",
+        evaluation=replace(
+            base.evaluation,
+            ros_gazebo=replace(settings, additional_workspaces=additional_workspaces),
+        ),
+    )
+
+
+def test_engine_evaluates_initial_population_concurrently_with_additional_workspaces(
+    tmp_path: Path,
+) -> None:
+    config = _mini_config_with_additional_workspaces(
+        tmp_path, ("/tmp/ws2", "/tmp/ws3", "/tmp/ws4")
+    )
+    database = ExperimentDatabase(config.database_path, reset=True)
+    evaluator = ConcurrencyTrackingEvaluator(delay=0.05)
+    engine = EvolutionEngine(config, database=database, evaluator=evaluator)
+    try:
+        engine.initialize()  # ros_gazebo_mini.yaml: population_size_per_island=1 x 4 islands
+        assert evaluator.max_concurrent == 4
+        assert database.count("individuals") == 4
+    finally:
+        engine.shutdown()
+        database.close()
+
+
+def test_engine_stays_sequential_without_additional_workspaces(tmp_path: Path) -> None:
+    config = _mini_config_with_additional_workspaces(tmp_path, ())
+    database = ExperimentDatabase(config.database_path, reset=True)
+    evaluator = ConcurrencyTrackingEvaluator(delay=0.02)
+    engine = EvolutionEngine(config, database=database, evaluator=evaluator)
+    try:
+        engine.initialize()
+        assert evaluator.max_concurrent == 1
+    finally:
+        engine.shutdown()
         database.close()
 
 

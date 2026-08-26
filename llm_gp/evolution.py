@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import random
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from .island import Island
 from .config import AppConfig
 from .database import ExperimentDatabase
 from .evaluator import Evaluator, MockEvaluator, RosGazeboEvaluator
-from .fitness import calculate_fitness
+from .fitness import calculate_fitness, compute_generation_stats
 from .models import EvaluationResult, GenerationSummary, Individual, MutationContext
 from .operators import (
     CrossoverOperator,
@@ -83,6 +84,21 @@ class EvolutionEngine:
         self.total_generated = 0# これまで生成した子個体の総数を0で初期化します。
         self.total_migrations = 0# これまで実行した移住の総数を0で初期化します。
         self.summaries: list[GenerationSummary] = []# 各世代の集計結果を保存する空のリストを作ります。
+        # ros_gazebo.additional_workspacesが設定されていれば、島の数だけGazebo評価を
+        # 同時実行できるようワーカースレッドプールを用意する(未設定なら1=完全に逐次、
+        # 従来と全く同じ動作)。実際に並列化されるのは評価(RosGazeboEvaluator.evaluate)
+        # だけで、交叉/変異のコード生成は常にメインスレッドで逐次のまま。
+        ros_gazebo_settings = config.evaluation.ros_gazebo
+        self._workspace_pool_size = (
+            1 + len(ros_gazebo_settings.additional_workspaces)
+            if ros_gazebo_settings is not None
+            else 1
+        )
+        self._executor: ThreadPoolExecutor | None = (
+            ThreadPoolExecutor(max_workers=self._workspace_pool_size)
+            if self._workspace_pool_size > 1
+            else None
+        )
 
     def _build_evaluator(self) -> Evaluator:# Evaluator型の評価器を作って返すメソッド
         if self.config.evaluation.evaluator_type == "mock":# 評価方式が mock か確認します。(プログラムが正しく動くか高速に確認するためのダミー)
@@ -111,6 +127,7 @@ class EvolutionEngine:
 
     def initialize(self) -> None:# 各島の初期集団を生成し、評価するメソッドです。
         population_size = self.config.evolution.population_size_per_island# 1つの島に配置する個体数を設定から取得します。
+        populations: dict[str, list[Individual]] = {}# 島名ごとの初期個体リスト(評価前に全島分作ってからまとめて評価するため)。
         for island_index, island in enumerate(self.islands):# すべての島を順番に処理します。
             population: list[Individual] = []# 設定された個体数だけ繰り返します。
             for member_index in range(population_size):
@@ -142,12 +159,20 @@ class EvolutionEngine:
                     selected_for_next_generation=True,# 初期個体は最初の集団に所属するため、次世代選択済みとして扱います。
                     change_history=["Initialized from the current Relaxed A* baseline"],# 変更履歴に、「現在のRelaxed A*を基準として初期化した」と記録します。
                 )
-                self._process_individual(individual)# 作成した個体を検証・評価し、適応度を計算します。
-                population.append(individual)# 評価済み個体を、現在の島の集団リストへ追加します。
-            island.population = population# すべての初期個体を作り終えたら、そのリストを島の集団として設定します。
+                population.append(individual)# まだ未評価の個体を、現在の島の集団リストへ追加します(評価は全島分集めた後にまとめて行う)。
+            populations[island.name] = population# この島の初期集団を後で参照できるよう記録します。
+
+        all_individuals = [
+            individual for population in populations.values() for individual in population
+        ]# 4島分の初期個体を1つのフラットなリストにまとめ、_process_individualsへ1回で渡します。
+        results = self._process_individuals(all_individuals)# 全個体をまとめて検証・評価します(ワーカープール設定時はここで並列実行される。適応度はまだ計算・保存しない)。
+
+        for island in self.islands:# すべての島を順番に処理します。
+            island.population = populations[island.name]# 評価済みの初期個体を、島の集団として設定します。
+            self._score_individuals(island.population)# その島の初期集団だけを母集団としてmin/maxを求め、適応度を計算します。
             for individual in island.population:# 島に所属する個体を1体ずつ処理します。
-                self.database.update_individual_status(individual)# 個体の最新状態をデータベースへ保存します。
                 self.database.save_population_membership(island.name, 0, individual)# その個体が、世代0でどの島の集団に所属しているか保存します。
+        self._persist_freshly_evaluated(all_individuals, results)# 適応度計算後に、評価結果(適応度込み)を1回だけデータベースへ書き込みます。
         self.database.commit()# ここまでのデータベース変更を確定します。
 
     def generate_children(self, island: Island, generation: int) -> list[Individual]:# 指定された島で、1組の親から子個体を生成するメソッドです。
@@ -221,6 +246,9 @@ class EvolutionEngine:
 
     def run_generation(self, generation: int) -> GenerationSummary:
         generated = 0
+        island_parents: dict[str, list[Individual]] = {}
+        island_children: dict[str, list[Individual]] = {}
+        all_children: list[Individual] = []
         for island in self.islands:
             parents = list(island.population)
             children: list[Individual] = []
@@ -228,8 +256,26 @@ class EvolutionEngine:
                 for child in self.generate_children(island, generation):
                     generated += 1
                     self.total_generated += 1
-                    self._process_individual(child)
                     children.append(child)
+            island_parents[island.name] = parents
+            island_children[island.name] = children
+            all_children.extend(children)
+
+        # LLMによる子生成(逐次)がすべて終わってから、評価(重い部分)だけを
+        # まとめて1回で処理する。ワーカープール設定時はここで並列実行される。
+        # 適応度の計算・保存はまだ行わない(下の島ごとのループでmin/maxを
+        # 求めてから行う)。
+        results = self._process_individuals(all_children)
+        results_by_id = {
+            child.individual_id: result for child, result in zip(all_children, results)
+        }
+
+        for island in self.islands:
+            parents = island_parents[island.name]
+            children = island_children[island.name]
+            # Rescore parents alongside this generation's children so both
+            # are ranked against the same min/max before selection.
+            self._score_individuals(parents + children)
             island.population = select_survivors(
                 parents + children,
                 self.config.evolution.population_size_per_island,
@@ -237,8 +283,10 @@ class EvolutionEngine:
                 island.rng,
                 self.config.selection.epsilon,
             )
-            for candidate in parents + children:
-                self.database.update_individual_status(candidate)
+            self._persist_rescored(parents)
+            self._persist_freshly_evaluated(
+                children, [results_by_id[child.individual_id] for child in children]
+            )
 
         migrations = 0
         if generation % self.config.migration.interval == 0:
@@ -280,21 +328,28 @@ class EvolutionEngine:
         )
         for generation in range(1, self.config.evolution.max_generations + 1):
             self.run_generation(generation)
+        self.shutdown()
         if self._owns_database:
             self.database.close()
         return self.summaries
 
-    def _process_individual(self, individual: Individual) -> None:
-        self.database.save_individual(individual)
+    def _validate_and_evaluate(self, individual: Individual) -> EvaluationResult:
+        """Validate + evaluate one individual, mutating only its own fields.
+
+        Touches no database state and no other individual's data, so this is
+        the one piece of _process_individual/_process_individuals that is
+        safe to run inside a worker thread (see _process_individuals): the
+        only shared object it reaches into is self.evaluator, and
+        RosGazeboEvaluator.evaluate() is itself safe under concurrent calls
+        (per-call workspace leased from a pool, its own rng access locked).
+        """
         valid, error = validate_individual(individual)
         individual.valid = valid
         individual.error_message = error
         if not valid:
             result = EvaluationResult(False, None, None, None, error_message=error)
             individual.fitness = self.config.fitness.failure_fitness
-            self.database.update_individual_status(individual)
-            self.database.save_evaluation(individual, result)
-            return
+            return result
         result = self.evaluator.evaluate(individual)
         individual.evaluation_success = result.success
         individual.error_message = result.error_message
@@ -302,9 +357,108 @@ class EvolutionEngine:
         individual.path_length = result.path_length
         individual.arrival_time = result.arrival_time
         individual.node_expansions = result.node_expansions
-        individual.fitness = calculate_fitness(result, self.config.fitness)
+        # Fitness is intentionally not set here: it is normalized against
+        # min/max metrics observed across a whole pool of individuals (see
+        # _score_individuals), which isn't known until every member of that
+        # pool has been evaluated.
+        return result
+
+    @staticmethod
+    def _result_from_individual(individual: Individual) -> EvaluationResult:
+        """Reconstruct the EvaluationResult an already-evaluated individual
+        came from, from the metrics _validate_and_evaluate copied onto it.
+        Used to rescore parents (evaluated in a prior generation) alongside
+        freshly evaluated children without re-running the evaluator."""
+        return EvaluationResult(
+            individual.evaluation_success,
+            individual.planning_time,
+            individual.path_length,
+            individual.arrival_time,
+            individual.error_message,
+            node_expansions=individual.node_expansions,
+        )
+
+    def _score_individuals(self, individuals: list[Individual]) -> None:
+        """Assign fitness to every valid individual in `individuals` by
+        normalizing its metrics against the min/max observed across this
+        same pool's successful evaluations (see fitness.calculate_fitness).
+        Invalid individuals already carry config.fitness.failure_fitness
+        from _validate_and_evaluate and are left untouched.
+
+        Call this once per island per generation on that island's full
+        parents+children pool (not just the new children), so parents are
+        rescored against the same generation's min/max as their children
+        before select_survivors compares them.
+        """
+        scoreable = [individual for individual in individuals if individual.valid]
+        results = [self._result_from_individual(individual) for individual in scoreable]
+        stats = compute_generation_stats(results)
+        for individual, result in zip(scoreable, results):
+            individual.fitness = calculate_fitness(result, self.config.fitness, stats)
+
+    def _process_individual(self, individual: Individual) -> None:
+        self.database.save_individual(individual)
+        result = self._validate_and_evaluate(individual)
+        self._score_individuals([individual])
         self.database.update_individual_status(individual)
         self.database.save_evaluation(individual, result)
+
+    def _process_individuals(self, individuals: list[Individual]) -> list[EvaluationResult]:
+        """Batch form of _process_individual's validate+evaluate step:
+        records every individual's creation up front (same order/timing as
+        calling _process_individual in a loop would, for the
+        save_individual() half), then runs validate+evaluate for the whole
+        batch -- concurrently across self._workspace_pool_size worker
+        threads if a pool was configured, otherwise sequentially in the same
+        order.
+
+        Unlike _process_individual, this does NOT score or persist the
+        evaluation: fitness normalization needs every result in the pool
+        first (see _score_individuals), so the caller must score the batch
+        and then persist it (see _persist_freshly_evaluated /
+        _persist_rescored) once fitness has been assigned.
+        """
+        if not individuals:
+            return []
+        for individual in individuals:
+            self.database.save_individual(individual)
+        if self._executor is None:
+            return [self._validate_and_evaluate(individual) for individual in individuals]
+        futures = [
+            self._executor.submit(self._validate_and_evaluate, individual)
+            for individual in individuals
+        ]
+        return [future.result() for future in futures]
+
+    def _persist_freshly_evaluated(
+        self, individuals: list[Individual], results: list[EvaluationResult]
+    ) -> None:
+        """Persist status and a first evaluations row for individuals just
+        evaluated by _process_individuals, after _score_individuals has set
+        their final .fitness."""
+        for individual, result in zip(individuals, results):
+            self.database.update_individual_status(individual)
+            self.database.save_evaluation(individual, result)
+
+    def _persist_rescored(self, individuals: list[Individual]) -> None:
+        """Update status and the existing evaluations row for individuals
+        rescored by _score_individuals without being re-evaluated this
+        generation -- i.e. parents carried over from a prior generation,
+        whose raw metrics are unchanged but whose fitness may have shifted
+        under this generation's min/max."""
+        for individual in individuals:
+            self.database.update_individual_status(individual)
+            self.database.update_evaluation_fitness(individual.individual_id, individual.fitness)
+
+    def shutdown(self) -> None:
+        """Release the worker thread pool, if one was created. Safe to call
+        even when no pool exists (self._executor is None). run() calls this
+        automatically; code that builds an EvolutionEngine directly (as
+        several tests do) and doesn't call run() should call this in a
+        finally block, the same way it already closes the database."""
+        if self._executor is not None:
+            self._executor.shutdown(wait=True)
+            self._executor = None
 
     def perform_ring_migration(self, generation: int) -> int:
         selections: list[tuple[Island, Island, Individual]] = []
@@ -347,7 +501,15 @@ class EvolutionEngine:
                 copied.path_length = result.path_length
                 copied.arrival_time = result.arrival_time
                 copied.node_expansions = result.node_expansions
-                copied.fitness = calculate_fitness(result, self.config.fitness)
+                # Normalize against the destination island's current
+                # population plus this migrant, rather than mutating that
+                # population's already-selected fitness values here.
+                pool_results = [
+                    self._result_from_individual(member)
+                    for member in target_island.population
+                ] + [result]
+                stats = compute_generation_stats(pool_results)
+                copied.fitness = calculate_fitness(result, self.config.fitness, stats)
             else:
                 result = EvaluationResult(
                     copied.evaluation_success,
