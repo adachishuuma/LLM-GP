@@ -93,6 +93,9 @@ class ExperimentDatabase:
                 response_text TEXT NOT NULL,
                 success INTEGER NOT NULL,
                 error_message TEXT,
+                prompt_tokens INTEGER,
+                completion_tokens INTEGER,
+                total_tokens INTEGER,
                 created_at TEXT NOT NULL
             );
             """
@@ -211,8 +214,9 @@ class ExperimentDatabase:
             """
             INSERT INTO llm_calls (
                 individual_id, model_name, prompt_text, response_text,
-                success, error_message, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                success, error_message, prompt_tokens, completion_tokens,
+                total_tokens, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 individual_id,
@@ -221,6 +225,9 @@ class ExperimentDatabase:
                 call.response_text,
                 int(call.success),
                 call.error_message,
+                call.prompt_tokens,
+                call.completion_tokens,
+                call.total_tokens,
                 _now(),
             ),
         )

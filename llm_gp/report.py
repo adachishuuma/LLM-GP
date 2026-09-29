@@ -9,8 +9,12 @@ import re
 import shutil
 import sqlite3
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+
+from .config import FitnessSettings, load_config
+from .fitness import calculate_fitness, compute_generation_stats
+from .models import EvaluationResult
 
 _WEIGHT_PATTERN = re.compile(r"constexpr\s+float\s+kLlmGpHeuristicWeight\s*=\s*([0-9.]+)f\s*;")
 
@@ -44,6 +48,19 @@ def select_baseline_and_best(
     Used both for the generation report below and for the optional
     initial-vs-best repeated-evaluation check run after a GP experiment
     (see llm_gp/main.py and llm_gp/verification.py).
+
+    IMPORTANT: `rows` must come from
+    `load_rows_with_corrected_generation_zero_fitness`, not the raw
+    `load_rows`. A generation-0 individual that survives into later
+    generations gets rescored every generation it lives on (fitness is
+    generation-relative), so `evaluations.fitness` -- and therefore plain
+    `load_rows` -- only ever holds its *last* rescoring, not its true
+    generation-0 value. Picking `baseline_best` from that raw data can name
+    the wrong individual as the initial baseline; see
+    docs/lattice_fork_minmax_5gen_experiment_report.md for a real case this
+    caused (and tests/test_report.py's
+    test_select_baseline_and_best_requires_generation_zero_corrected_fitness
+    for a regression test).
     """
     successful = [row for row in rows if row.success and row.fitness is not None]
     initial_all = [row for row in rows if row.generation == 0]
@@ -58,11 +75,46 @@ def select_baseline_and_best(
     return baseline_best, experiment_best
 
 
-def generate_report(database_path: Path, output_directory: Path) -> dict[str, Path]:
+def load_rows_with_corrected_generation_zero_fitness(
+    database_path: Path, fitness_settings: FitnessSettings
+) -> list[ResultRow]:
+    """load_rows(), but with every generation-0 row's fitness corrected to
+    its true generation-0-pool-relative value.
+
+    Generation 0's individuals may have gone on to survive into (and be
+    rescored in) many later generations, so evaluations.fitness for them
+    reflects their *last* rescoring rather than their original generation-0
+    value. Anywhere generation 0 is treated as "the initial baseline"
+    (select_baseline_and_best, and therefore both this module's own report
+    and the standalone initial-vs-best verification in
+    scripts/verify_generation_gain.py and llm_gp/main.py) must correct for
+    this first, or the wrong individual can be picked as the baseline --
+    see docs/lattice_fork_minmax_5gen_experiment_report.md for a real case
+    this caused. Generation 0 has no parents, so its own scoring pool is
+    simply its own population.
+    """
+    rows = load_rows(database_path)
+    rows_by_id = {row.individual_id: row for row in rows}
+    population_by_generation = _load_population_by_generation(database_path)
+    gen0_stats = _reconstruct_generation_stats(0, population_by_generation, rows_by_id)
+    return [
+        replace(row, fitness=calculate_fitness(_result_from_row(row), fitness_settings, gen0_stats))
+        if row.generation == 0 and row.success
+        else row
+        for row in rows
+    ]
+
+
+def generate_report(
+    database_path: Path, output_directory: Path, fitness_settings: FitnessSettings
+) -> dict[str, Path]:
     if not database_path.is_file():
         raise FileNotFoundError(database_path)
     output_directory.mkdir(parents=True, exist_ok=True)
-    rows = load_rows(database_path)
+    rows = load_rows_with_corrected_generation_zero_fitness(database_path, fitness_settings)
+    rows_by_id = {row.individual_id: row for row in rows}
+    population_by_generation = _load_population_by_generation(database_path)
+
     baseline_best, experiment_best = select_baseline_and_best(rows)
     successful = [row for row in rows if row.success and row.fitness is not None]
     initial_successful = [row for row in successful if row.generation == 0]
@@ -80,25 +132,68 @@ def generate_report(database_path: Path, output_directory: Path) -> dict[str, Pa
     generation_csv = output_directory / "generation_comparison.csv"
     records: list[dict[str, object]] = []
     diffs: list[tuple[int, ResultRow, Path]] = []
-    cumulative: list[ResultRow] = []
-    for generation in sorted({row.generation for row in rows}):
-        current = [row for row in successful if row.generation == generation]
-        if not current:
+    running_best_id: str | None = None
+    running_best_generation: int | None = None
+    running_best_fitness: float | None = None
+    for generation in sorted({row.generation for row in rows} | set(population_by_generation)):
+        born_this_generation = [row for row in rows if row.generation == generation]
+        # Recompute fitness for this generation's *entire* actual scoring
+        # pool (population entering the generation, plus the children newly
+        # born in it) in one pass -- evaluations.fitness only ever stores an
+        # individual's most recent rescoring, so both "how good were this
+        # generation's own new children" and "who is the fittest individual
+        # actually in this generation's population" need values recomputed
+        # against this generation's own pool rather than read directly.
+        stats = _reconstruct_generation_stats(generation, population_by_generation, rows_by_id)
+        pool_ids = _reconstruct_generation_pool_ids(generation, population_by_generation, rows_by_id)
+        pool_fitness: dict[str, float] = {}
+        for individual_id in pool_ids:
+            row = rows_by_id.get(individual_id)
+            if row is None or not row.success:
+                continue
+            pool_fitness[individual_id] = calculate_fitness(_result_from_row(row), fitness_settings, stats)
+
+        born_success_ids = [row.individual_id for row in born_this_generation if row.individual_id in pool_fitness]
+        if not born_success_ids and generation not in population_by_generation:
             continue
-        cumulative.extend(current)
-        best = max(current, key=lambda row: row.fitness or 0.0)
-        best_so_far = max(cumulative, key=lambda row: row.fitness or 0.0)
-        average = sum(row.fitness or 0.0 for row in current) / len(current)
+        average = (
+            sum(pool_fitness[iid] for iid in born_success_ids) / len(born_success_ids)
+            if born_success_ids else 0.0
+        )
+
+        # "generation_best" means the fittest individual actually present in
+        # this generation's population (survivors carried over included), not
+        # merely the fittest among the children newly born this generation --
+        # a strong individual born several generations back (and still living
+        # on as a survivor/elite) should be reported as this generation's best
+        # if nothing newer has beaten it yet.
+        population_fitness = [
+            (individual_id, pool_fitness[individual_id])
+            for individual_id in population_by_generation.get(generation, set())
+            if individual_id in pool_fitness
+        ]
+        if population_fitness:
+            best_id, best_fitness = max(population_fitness, key=lambda pair: pair[1])
+        elif born_success_ids:
+            best_id = max(born_success_ids, key=lambda iid: pool_fitness[iid])
+            best_fitness = pool_fitness[best_id]
+        else:
+            best_id, best_fitness = None, None
+        best = rows_by_id[best_id] if best_id is not None else max(born_this_generation, key=lambda row: row.fitness or 0.0)
+
+        if best_fitness is not None and (running_best_fitness is None or best_fitness > running_best_fitness):
+            running_best_id, running_best_generation, running_best_fitness = best_id, generation, best_fitness
+
         records.append({
             "generation": generation,
-            "evaluated": len([row for row in rows if row.generation == generation]),
-            "successful": len(current),
+            "evaluated": len(born_this_generation),
+            "successful": len(born_success_ids),
             "average_fitness": average,
             "average_improvement_vs_initial_percent": _percent_change(baseline_average, average),
             "generation_best_id": best.individual_id,
             "generation_best_island": best.island,
             "generation_best_operator": best.operator_type,
-            "generation_best_fitness": best.fitness,
+            "generation_best_fitness": best_fitness,
             "generation_best_planning_time": best.planning_time,
             "planning_time_improvement_vs_initial_percent": _reduction_percent(
                 baseline_best.planning_time if initial_successful else None,
@@ -120,16 +215,26 @@ def generate_report(database_path: Path, output_directory: Path) -> dict[str, Pa
                 best.arrival_time,
             ),
             "generation_best_heuristic_weight": best.heuristic_weight,
-            "best_so_far_id": best_so_far.individual_id,
-            "best_so_far_generation": best_so_far.generation,
-            "best_so_far_fitness": best_so_far.fitness,
+            "best_so_far_id": running_best_id,
+            "best_so_far_generation": running_best_generation,
+            "best_so_far_fitness": running_best_fitness,
             "best_so_far_improvement_vs_initial_best_percent": _percent_change(
-                baseline_best.fitness if initial_successful else None, best_so_far.fitness
+                baseline_best.fitness if initial_successful else None, running_best_fitness
+            ),
+            # Unlike best_so_far above (which is pinned to whichever generation
+            # first produced the overall-best individual, and never moves once
+            # set), this is recomputed fresh each generation from that
+            # generation's own population -- so it will track best_so_far
+            # exactly while the reigning best individual is still alive in the
+            # population, and can only differ if it has since been dropped.
+            "generation_best_improvement_vs_initial_best_percent": _percent_change(
+                baseline_best.fitness if initial_successful else None, best_fitness
             ),
         })
+        best_display = replace(best, fitness=best_fitness)
         diff_path = output_directory / f"generation_{generation:03d}_best_{best.individual_id}.diff"
         _write_diff(diff_path, baseline_source, _read_source(best.source_path), baseline_best.source_path, best.source_path)
-        diffs.append((generation, best, diff_path))
+        diffs.append((generation, best_display, diff_path))
     _write_dict_csv(generation_csv, records)
     metric_csv = output_directory / "metric_comparison.csv"
     _write_metric_csv(metric_csv, records)
@@ -143,9 +248,11 @@ def generate_report(database_path: Path, output_directory: Path) -> dict[str, Pa
     best_outputs = _export_best_algorithm(
         output_directory / "best_algorithm", baseline_best, experiment_best
     )
+    token_usage_csv = output_directory / "token_usage_by_generation.csv"
+    token_totals = _write_token_usage_csv(database_path, token_usage_csv)
     markdown = output_directory / "generation_algorithm_report.md"
     _write_markdown(markdown, database_path, baseline_best, baseline_average,
-                    len(initial_successful), len(initial_all), records, diffs)
+                    len(initial_successful), len(initial_all), records, diffs, token_totals)
     outputs = {
         "generation_csv": generation_csv,
         "individual_csv": individual_csv,
@@ -153,9 +260,155 @@ def generate_report(database_path: Path, output_directory: Path) -> dict[str, Pa
         "metric_csv": metric_csv,
         "metric_markdown": metric_markdown,
         "markdown": markdown,
+        "token_usage_csv": token_usage_csv,
     }
     outputs.update(best_outputs)
     return outputs
+
+
+def _load_population_by_generation(database_path: Path) -> dict[int, set[str]]:
+    connection = sqlite3.connect(database_path)
+    records = connection.execute(
+        "SELECT generation, individual_id FROM population_memberships"
+    ).fetchall()
+    connection.close()
+    by_generation: dict[int, set[str]] = {}
+    for generation, individual_id in records:
+        by_generation.setdefault(int(generation), set()).add(individual_id)
+    return by_generation
+
+
+def token_usage_summary(database_path: Path) -> dict[str, int]:
+    """Whole-experiment LLM token totals, for printing a one-line summary
+    right after a run finishes (see llm_gp/main.py) without needing to open
+    the generated report. `calls_missing_usage` counts calls whose response
+    carried no usage data (e.g. mock operators, or an older run's database
+    predating this column) and are therefore excluded from the token sums."""
+    return _aggregate_token_usage(_load_llm_call_rows(database_path))[1]
+
+
+def _load_llm_call_rows(
+    database_path: Path,
+) -> list[tuple[int, bool, int | None, int | None, int | None]]:
+    connection = sqlite3.connect(database_path)
+    try:
+        return connection.execute(
+            """
+            SELECT i.generation, c.success, c.prompt_tokens, c.completion_tokens, c.total_tokens
+            FROM llm_calls c JOIN individuals i USING(individual_id)
+            """
+        ).fetchall()
+    finally:
+        connection.close()
+
+
+def _new_usage_bucket() -> dict[str, int]:
+    return {
+        "calls": 0,
+        "successful_calls": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "calls_missing_usage": 0,
+    }
+
+
+def _aggregate_token_usage(
+    records: list[tuple[int, bool, int | None, int | None, int | None]],
+) -> tuple[dict[int, dict[str, int]], dict[str, int]]:
+    by_generation: dict[int, dict[str, int]] = {}
+    totals = _new_usage_bucket()
+    for generation, success, prompt_tokens, completion_tokens, total_tokens in records:
+        bucket = by_generation.setdefault(int(generation), _new_usage_bucket())
+        for target in (bucket, totals):
+            target["calls"] += 1
+            if success:
+                target["successful_calls"] += 1
+            if total_tokens is None:
+                target["calls_missing_usage"] += 1
+                continue
+            target["prompt_tokens"] += prompt_tokens or 0
+            target["completion_tokens"] += completion_tokens or 0
+            target["total_tokens"] += total_tokens
+    return by_generation, totals
+
+
+def _write_token_usage_csv(database_path: Path, path: Path) -> dict[str, int]:
+    by_generation, totals = _aggregate_token_usage(_load_llm_call_rows(database_path))
+    fields = [
+        "generation", "calls", "successful_calls", "calls_missing_usage",
+        "prompt_tokens", "completion_tokens", "total_tokens",
+    ]
+    with path.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for generation in sorted(by_generation):
+            writer.writerow({"generation": generation, **by_generation[generation]})
+    return totals
+
+
+def _result_from_row(row: ResultRow) -> EvaluationResult:
+    return EvaluationResult(
+        row.success, row.planning_time, row.path_length, row.arrival_time,
+        node_expansions=row.node_expansions,
+    )
+
+
+def _reconstruct_generation_pool_ids(
+    generation: int, population_by_generation: dict[int, set[str]], rows_by_id: dict[str, ResultRow]
+) -> set[str]:
+    """The exact set of individuals EvolutionEngine._score_individuals scored
+    together when it last (re)computed fitness for this generation: the
+    population entering the generation (its parents; for generation 0 there
+    are none, so it's just generation 0's own population) plus every
+    individual born in this generation (its children).
+
+    Needed because evaluations.fitness only ever stores an individual's most
+    recent rescoring -- a survivor that lives on for several more generations
+    keeps getting overwritten, so simply reading row.fitness for an older
+    generation's row would show a later generation's value instead of what
+    was actually true at the time. Recomputing fitness against this
+    generation's own reconstructed pool (see _reconstruct_generation_stats)
+    recovers the true historical value.
+    """
+    if generation == 0:
+        return set(population_by_generation.get(0, set()))
+    pool_ids = set(population_by_generation.get(generation - 1, set()))
+    pool_ids |= {
+        row.individual_id for row in rows_by_id.values() if row.generation == generation
+    }
+    return pool_ids
+
+
+def _reconstruct_generation_stats(
+    generation: int, population_by_generation: dict[int, set[str]], rows_by_id: dict[str, ResultRow]
+):
+    pool_ids = _reconstruct_generation_pool_ids(generation, population_by_generation, rows_by_id)
+    results = [
+        _result_from_row(rows_by_id[individual_id])
+        for individual_id in pool_ids
+        if individual_id in rows_by_id
+    ]
+    return compute_generation_stats(results)
+
+
+def _historical_fitness(
+    row: ResultRow,
+    generation: int,
+    population_by_generation: dict[int, set[str]],
+    rows_by_id: dict[str, ResultRow],
+    fitness_settings: FitnessSettings,
+) -> float | None:
+    """row's fitness as it actually was at `generation`, recomputed against
+    that generation's own reconstructed scoring pool rather than read
+    directly from the (possibly since-overwritten) evaluations.fitness
+    column. Falls back to the stored value if the pool can't be
+    reconstructed (e.g. a database from before population_memberships
+    tracked this, or the row's own metrics are missing/non-finite)."""
+    if not row.success:
+        return row.fitness
+    stats = _reconstruct_generation_stats(generation, population_by_generation, rows_by_id)
+    return calculate_fitness(_result_from_row(row), fitness_settings, stats)
 
 
 def load_rows(database_path: Path) -> list[ResultRow]:
@@ -398,7 +651,8 @@ def _write_diff(path: Path, baseline: str, candidate: str, baseline_path: Path, 
 def _write_markdown(path: Path, database_path: Path, baseline_best: ResultRow,
                     baseline_average: float | None, baseline_successful: int,
                     baseline_evaluated: int, records: list[dict[str, object]],
-                    diffs: list[tuple[int, ResultRow, Path]]) -> None:
+                    diffs: list[tuple[int, ResultRow, Path]],
+                    token_totals: dict[str, int] | None = None) -> None:
     average_text = f"{baseline_average:.8f}" if baseline_average is not None else "算出不能"
     lines = [
         "# 世代・アルゴリズム比較レポート", "", f"- Database: `{database_path}`",
@@ -408,21 +662,59 @@ def _write_markdown(path: Path, database_path: Path, baseline_best: ResultRow,
     ]
     if baseline_successful == 0:
         lines.extend(["> 世代0のROS/Gazebo評価がすべて失敗したため、初期値に対する改善率は算出できません。", ""])
+    if token_totals and token_totals["calls"] > 0:
+        lines.extend([
+            "## LLMトークン使用量(実験全体)", "",
+            f"- LLM呼び出し回数: `{token_totals['calls']}`(成功 `{token_totals['successful_calls']}`)",
+            f"- prompt tokens: `{token_totals['prompt_tokens']}`",
+            f"- completion tokens: `{token_totals['completion_tokens']}`",
+            f"- total tokens: `{token_totals['total_tokens']}`",
+        ])
+        if token_totals["calls_missing_usage"] > 0:
+            lines.append(
+                f"- (usage情報なしの呼び出し: `{token_totals['calls_missing_usage']}`件。"
+                "mock演算子、またはusageを返さない応答のため、上記トークン数には未集計)"
+            )
+        lines.extend(["", "世代ごとの内訳は `token_usage_by_generation.csv` を参照。", ""])
     lines.extend(["## 世代比較", "",
-                  "| 世代 | 成功/評価 | 平均適応度 | 世代最良個体 | 演算 | 最良適応度 | 初期最良比 |",
-                  "|---:|---:|---:|---|---|---:|---:|"])
+                  "> 「成功/評価」はその世代で新規に生まれた子個体のうち何体が評価に成功したか。"
+                  "「世代最良個体」はその世代の**集団に実際に所属していた**個体(前の世代からの生存者を含む)の中の最良個体で、"
+                  "新規に生まれた子だけの最良ではない。「世代最良比」はその世代最良個体を初期最良個体と比べた改善率、"
+                  "「累積最良比」はそれまでに見つかった最良個体(best-so-far)による改善率(単調非減少)。"
+                  "最良個体が世代をまたいで生存し続けている間は両者は一致する。",
+                  "",
+                  "| 世代 | 成功/評価 | 平均適応度 | 世代最良個体 | 演算 | 最良適応度 | 世代最良比 | 累積最良比 |",
+                  "|---:|---:|---:|---|---|---:|---:|---:|"])
     for row in records:
-        improvement = row["best_so_far_improvement_vs_initial_best_percent"]
-        improvement_text = f"{improvement:+.2f}%" if isinstance(improvement, (int, float)) else "算出不能"
+        generation_improvement = row["generation_best_improvement_vs_initial_best_percent"]
+        generation_improvement_text = (
+            f"{generation_improvement:+.2f}%"
+            if isinstance(generation_improvement, (int, float))
+            else "算出不能"
+        )
+        cumulative_improvement = row["best_so_far_improvement_vs_initial_best_percent"]
+        cumulative_improvement_text = (
+            f"{cumulative_improvement:+.2f}%"
+            if isinstance(cumulative_improvement, (int, float))
+            else "算出不能"
+        )
+        generation_best_fitness = row["generation_best_fitness"]
+        generation_best_fitness_text = (
+            f"{generation_best_fitness:.6f}"
+            if isinstance(generation_best_fitness, (int, float))
+            else "算出不能"
+        )
         lines.append(f"| {row['generation']} | {row['successful']}/{row['evaluated']} | "
                      f"{row['average_fitness']:.6f} | `{row['generation_best_id']}` | "
-                     f"`{row['generation_best_operator']}` | {row['generation_best_fitness']:.6f} | {improvement_text} |")
+                     f"`{row['generation_best_operator']}` | {generation_best_fitness_text} | "
+                     f"{generation_improvement_text} | {cumulative_improvement_text} |")
     lines.extend(["", "## 各世代の最良アルゴリズム", ""])
     for generation, best, diff_path in diffs:
+        fitness_text = f"{best.fitness:.8f}" if best.fitness is not None else "算出不能"
         lines.extend([
             f"### 世代 {generation}: `{best.individual_id}`", "", f"- 島: `{best.island}`",
             f"- 演算: `{best.operator_type}`", f"- 親: `{', '.join(best.parent_ids) or 'なし'}`",
-            f"- 適応度: `{best.fitness:.8f}`",
+            f"- 適応度: `{fitness_text}`",
             f"- planning/path/arrival: `{best.planning_time}`, `{best.path_length}`, `{best.arrival_time}`",
             f"- 変更履歴: {best.changes or 'なし'}", f"- ソース: `{best.source_path}`",
             f"- 初期基準個体との差分: `{diff_path}`", "",
@@ -452,8 +744,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Compare fitness and algorithms by generation")
     parser.add_argument("--database", type=Path, default=Path("experiment_results/roulette_evolution.db"))
     parser.add_argument("--output", type=Path, default=Path("experiment_results/roulette_evolution_analysis"))
+    parser.add_argument(
+        "--config", type=Path, required=True,
+        help="YAML config whose fitness weights/references produced this database "
+             "(the run directory keeps a copy of the exact one used, alongside the .db).",
+    )
     args = parser.parse_args()
-    for name, output in generate_report(args.database, args.output).items():
+    fitness_settings = load_config(args.config).fitness
+    for name, output in generate_report(args.database, args.output, fitness_settings).items():
         print(f"{name}: {output.resolve()}")
 
 

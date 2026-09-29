@@ -9,7 +9,12 @@ from pathlib import Path
 from .config import AppConfig, load_config
 from .evaluator import cleanup_stray_ros_gazebo_processes
 from .evolution import EvolutionEngine
-from .report import generate_report, load_rows, select_baseline_and_best
+from .report import (
+    generate_report,
+    load_rows_with_corrected_generation_zero_fitness,
+    select_baseline_and_best,
+    token_usage_summary,
+)
 from .run_lock import ros_gazebo_run_lock
 from .verification import run_comparison
 
@@ -83,7 +88,9 @@ def main() -> None:
             engine = EvolutionEngine(prepared_config)
             summaries = engine.run()
             analysis_directory = run_directory / "analysis"
-            report_outputs = generate_report(prepared_config.database_path, analysis_directory)
+            report_outputs = generate_report(
+                prepared_config.database_path, analysis_directory, prepared_config.fitness
+            )
             if (
                 args.verify_repetitions > 0
                 and prepared_config.evaluation.evaluator_type == "ros_gazebo"
@@ -106,6 +113,14 @@ def main() -> None:
     if "best_source" in report_outputs:
         print(f"Best algorithm: {report_outputs['best_source']}")
     print(f"Run directory: {run_directory}")
+    token_totals = token_usage_summary(prepared_config.database_path)
+    if token_totals["calls"] > 0:
+        print(
+            f"LLM tokens: total={token_totals['total_tokens']} "
+            f"(prompt={token_totals['prompt_tokens']}, completion={token_totals['completion_tokens']}) "
+            f"over {token_totals['calls']} call(s), "
+            f"{token_totals['calls_missing_usage']} without usage data"
+        )
 
 
 def _verify_generational_gain(
@@ -117,7 +132,7 @@ def _verify_generational_gain(
     the same ros_gazebo_run_lock already held for the evolutionary run that
     produced these individuals (see scripts/verify_generation_gain.py for the
     standalone, run-directory-driven version of this same check)."""
-    rows = load_rows(config.database_path)
+    rows = load_rows_with_corrected_generation_zero_fitness(config.database_path, config.fitness)
     baseline, best = select_baseline_and_best(rows)
     if best is None:
         print("\nSkipping initial-vs-best verification: no successful evaluations to compare.")

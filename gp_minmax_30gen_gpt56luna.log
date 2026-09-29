@@ -1,0 +1,58 @@
+Initialized 1 islands with 10 evaluated individuals; goal_x in [15.0, 16.5], goal_y in [1.5, 2.3], yaw=0.0
+evaluator=RosGazeboEvaluator; crossover=OpenAIGPT4oMiniCrossoverOperator; mutation=OpenAIGPT4oMiniMutationOperator
+generation=1 generated=6 migrations=0 populations[main=10]
+generation=2 generated=6 migrations=0 populations[main=10]
+generation=3 generated=6 migrations=0 populations[main=10]
+generation=4 generated=6 migrations=0 populations[main=10]
+generation=5 generated=6 migrations=0 populations[main=10]
+generation=6 generated=6 migrations=0 populations[main=10]
+generation=7 generated=6 migrations=0 populations[main=10]
+generation=8 generated=6 migrations=0 populations[main=10]
+generation=9 generated=6 migrations=0 populations[main=10]
+generation=10 generated=6 migrations=1 populations[main=10]
+generation=11 generated=6 migrations=0 populations[main=10]
+generation=12 generated=6 migrations=0 populations[main=10]
+generation=13 generated=6 migrations=0 populations[main=10]
+generation=14 generated=6 migrations=0 populations[main=10]
+generation=15 generated=6 migrations=0 populations[main=10]
+generation=16 generated=6 migrations=0 populations[main=10]
+generation=17 generated=6 migrations=0 populations[main=10]
+generation=18 generated=6 migrations=0 populations[main=10]
+generation=19 generated=6 migrations=0 populations[main=10]
+generation=20 generated=6 migrations=1 populations[main=10]
+generation=21 generated=6 migrations=0 populations[main=10]
+generation=22 generated=6 migrations=0 populations[main=10]
+generation=23 generated=6 migrations=0 populations[main=10]
+generation=24 generated=6 migrations=0 populations[main=10]
+generation=25 generated=6 migrations=0 populations[main=10]
+generation=26 generated=6 migrations=0 populations[main=10]
+generation=27 generated=6 migrations=0 populations[main=10]
+generation=28 generated=6 migrations=0 populations[main=10]
+generation=29 generated=6 migrations=0 populations[main=10]
+generation=30 generated=6 migrations=1 populations[main=10]
+
+Verifying generational gain x10 each: initial ind_000001 (gen 0, fitness=0.000000) vs best ind_000240 (gen 29, fitness=1.000000)
+Evaluating initial_ind_000001 x10 ...
+Evaluating best_ind_000240 x10 ...
+  -> 10/10 repetitions succeeded (100%); partial means: planning=0.0224 path=38.9776 arrival=172.5584 node_expansions=42503
+  -> strict (all-10-must-succeed) result: success=True fitness=0.000000
+  -> 10/10 repetitions succeeded (100%); partial means: planning=1.7789 path=38.0804 arrival=171.8266 node_expansions=8312
+  -> strict (all-10-must-succeed) result: success=True fitness=1.000000
+
+Wrote /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_minmax_30gen/run_20260927_082603/analysis/repeat10_statistics.csv
+Wrote /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_minmax_30gen/run_20260927_082603/analysis/repeat10_significance.csv
+
+metric              initial_mean     best_mean  rel.improve %   p-value  sig@.05
+planning_time             0.0224        1.7789       -7828.79    0.9988    False
+path_length              38.9776       38.0804           2.30    0.0452     True
+arrival_time            172.5584      171.8266           0.42    0.7713    False
+node_expansions       42502.7000     8311.6000          80.44    0.0000     True
+
+rel.improve % is (initial - best) / initial * 100: positive means the best candidate is lower/better. p-value is a two-sided permutation test on the two repeated-evaluation samples (exact when feasible, else a seeded 20000-iteration Monte Carlo estimate); it answers 'could this gap plausibly be run-to-run Gazebo noise?', not 'is the effect large'.
+Completed 30 generations; generated=180, migrations=3
+SQLite: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_minmax_30gen/run_20260927_082603/roulette_ros_lattice_fork_minmax_30gen.db
+CSV: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_minmax_30gen/run_20260927_082603/generation_summary.csv
+Analysis: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_minmax_30gen/run_20260927_082603/analysis/generation_algorithm_report.md
+Best algorithm: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_minmax_30gen/run_20260927_082603/analysis/best_algorithm/best_algorithm.cpp
+Run directory: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_minmax_30gen/run_20260927_082603
+LLM tokens: total=1504017 (prompt=755282, completion=748735) over 346 call(s), 0 without usage data

@@ -1,0 +1,32 @@
+Initialized 1 islands with 10 evaluated individuals; goal_x in [15.0, 16.5], goal_y in [1.5, 2.3], yaw=0.0
+evaluator=RosGazeboEvaluator; crossover=OpenAIGPT4oMiniCrossoverOperator; mutation=OpenAIGPT4oMiniMutationOperator
+generation=1 generated=6 migrations=0 populations[main=10]
+generation=2 generated=6 migrations=0 populations[main=10]
+generation=3 generated=6 migrations=0 populations[main=10]
+generation=4 generated=6 migrations=0 populations[main=10]
+generation=5 generated=6 migrations=0 populations[main=10]
+
+Verifying generational gain x10 each: initial ind_000009 (gen 0, fitness=0.764015) vs best ind_000032 (gen 3, fitness=0.900161)
+Evaluating initial_ind_000009 x10 ...
+Evaluating best_ind_000032 x10 ...
+  -> 10/10 repetitions succeeded (100%); partial means: planning=0.0242 path=39.4411 arrival=174.8132 node_expansions=43194
+  -> strict (all-10-must-succeed) result: success=True fitness=0.330000
+  -> 10/10 repetitions succeeded (100%); partial means: planning=0.0242 path=37.8571 arrival=169.2119 node_expansions=50920
+  -> strict (all-10-must-succeed) result: success=True fitness=0.670000
+
+Wrote /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_minmax_5gen/run_20260827_014318/analysis/repeat10_statistics.csv
+Wrote /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_minmax_5gen/run_20260827_014318/analysis/repeat10_significance.csv
+
+metric              initial_mean     best_mean  rel.improve %   p-value  sig@.05
+planning_time             0.0242        0.0242          -0.02    0.9973    False
+path_length              39.4411       37.8571           4.02    0.0005     True
+arrival_time            174.8132      169.2119           3.20    0.0027     True
+node_expansions       43193.5000    50919.7000         -17.89    0.0018     True
+
+rel.improve % is (initial - best) / initial * 100: positive means the best candidate is lower/better. p-value is a two-sided permutation test on the two repeated-evaluation samples (exact when feasible, else a seeded 20000-iteration Monte Carlo estimate); it answers 'could this gap plausibly be run-to-run Gazebo noise?', not 'is the effect large'.
+Completed 5 generations; generated=30, migrations=0
+SQLite: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_minmax_5gen/run_20260827_014318/roulette_ros_lattice_fork_minmax_5gen.db
+CSV: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_minmax_5gen/run_20260827_014318/generation_summary.csv
+Analysis: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_minmax_5gen/run_20260827_014318/analysis/generation_algorithm_report.md
+Best algorithm: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_minmax_5gen/run_20260827_014318/analysis/best_algorithm/best_algorithm.cpp
+Run directory: /mnt/c/Users/adachi/catkin_ws/experiment_results/lattice_fork_minmax_5gen/run_20260827_014318

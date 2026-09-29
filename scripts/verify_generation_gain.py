@@ -43,7 +43,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from llm_gp.config import load_config
 from llm_gp.evaluator import cleanup_stray_ros_gazebo_processes
-from llm_gp.report import load_rows, select_baseline_and_best
+from llm_gp.report import load_rows_with_corrected_generation_zero_fitness, select_baseline_and_best
 from llm_gp.run_lock import ros_gazebo_run_lock
 from llm_gp.verification import run_comparison
 
@@ -129,7 +129,7 @@ def main() -> int:
     config_path = resolve_config(run_dir, args.config)
     config = load_config(config_path)
 
-    rows = load_rows(database_path)
+    rows = load_rows_with_corrected_generation_zero_fitness(database_path, config.fitness)
     baseline, best = select_baseline_and_best(rows)
     if best is None:
         raise SystemExit(f"No successful evaluations in {database_path} to compare against")

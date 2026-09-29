@@ -58,6 +58,22 @@ def _create_response_with_retry(
     raise AssertionError("unreachable: loop always returns or raises")
 
 
+def _extract_usage(response: object) -> tuple[int | None, int | None, int | None]:
+    """Pull (prompt_tokens, completion_tokens, total_tokens) out of an
+    OpenAI Responses API response, tolerating anything that doesn't carry
+    a `usage` object (e.g. the FakeResponse test doubles) by returning all
+    None instead of raising."""
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return None, None, None
+    prompt_tokens = getattr(usage, "input_tokens", None)
+    completion_tokens = getattr(usage, "output_tokens", None)
+    total_tokens = getattr(usage, "total_tokens", None)
+    if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+        total_tokens = prompt_tokens + completion_tokens
+    return prompt_tokens, completion_tokens, total_tokens
+
+
 class IdFactory:
     def __init__(self) -> None:
         self._counter = 0
@@ -460,6 +476,7 @@ class OpenAIGPT4oMiniMutationOperator:
                 max_delay_seconds=self.connection_retry_max_seconds,
             )
             generated = _extract_generated_source(response.output_text, is_cpp)
+            prompt_tokens, completion_tokens, total_tokens = _extract_usage(response)
             if not is_cpp:
                 call_records.append(
                     LLMCallRecord(
@@ -467,6 +484,9 @@ class OpenAIGPT4oMiniMutationOperator:
                         request_input,
                         response.output_text,
                         True,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
                     )
                 )
                 valid = True
@@ -485,6 +505,9 @@ class OpenAIGPT4oMiniMutationOperator:
                     response.output_text,
                     valid,
                     None if valid else validation_error,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
                 )
             )
             if valid:
@@ -629,9 +652,18 @@ class OpenAIGPT4oMiniCrossoverOperator:
                 max_delay_seconds=self.connection_retry_max_seconds,
             )
             generated = _extract_generated_source(response.output_text, is_cpp)
+            prompt_tokens, completion_tokens, total_tokens = _extract_usage(response)
             if not is_cpp:
                 call_records.append(
-                    LLMCallRecord(self.model, request_input, response.output_text, True)
+                    LLMCallRecord(
+                        self.model,
+                        request_input,
+                        response.output_text,
+                        True,
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
+                    )
                 )
                 valid = True
                 break
@@ -653,6 +685,9 @@ class OpenAIGPT4oMiniCrossoverOperator:
                     response.output_text,
                     valid,
                     None if valid else validation_error,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
                 )
             )
             if valid:

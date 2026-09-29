@@ -38,6 +38,13 @@ class LLMCallRecord:
     response_text: str
     success: bool
     error_message: str | None = None
+    # Token usage reported by the provider for this call (None for mock
+    # operators, or if the response carried no usage data), so 30+
+    # generation runs can report actual LLM cost/consumption instead of
+    # only call counts.
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
 
 
 @dataclass

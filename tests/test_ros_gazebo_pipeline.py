@@ -277,6 +277,34 @@ class FakeOpenAIClient:
         self.responses = FakeResponses(outputs)
 
 
+class FakeUsage:
+    def __init__(self, input_tokens: int, output_tokens: int) -> None:
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.total_tokens = input_tokens + output_tokens
+
+
+class FakeResponseWithUsage:
+    def __init__(self, output_text: str, usage: FakeUsage) -> None:
+        self.output_text = output_text
+        self.usage = usage
+
+
+class FakeResponsesWithUsage:
+    def __init__(self, output_text: str, usage: FakeUsage) -> None:
+        self._response = FakeResponseWithUsage(output_text, usage)
+        self.inputs: list[str] = []
+
+    def create(self, *, model: str, input: str) -> FakeResponseWithUsage:
+        self.inputs.append(input)
+        return self._response
+
+
+class FakeOpenAIClientWithUsage:
+    def __init__(self, output_text: str, usage: FakeUsage) -> None:
+        self.responses = FakeResponsesWithUsage(output_text, usage)
+
+
 class FlakyThenOKResponses:
     """Raises a given (transient) error a fixed number of times before
     returning canned outputs -- exercises _create_response_with_retry's
@@ -446,6 +474,67 @@ def test_openai_mutation_extracts_cpp_fence_surrounded_by_prose(
     assert "Here's" not in generated
     assert validate_individual(child) == (True, None)
     assert len(client.responses.inputs) == 1
+
+
+def test_openai_mutation_records_token_usage_from_response(
+    tmp_path: Path, test_config: AppConfig
+) -> None:
+    """Token counts from the Responses API usage field must be carried onto
+    the LLMCallRecord, so a run's total LLM token consumption can be
+    measured (needed for a 30-generation run, where cost adds up)."""
+    ids = IdFactory()
+    parent = _cpp_parent(tmp_path, ids)
+    source = Path(parent.source_path).read_text(encoding="utf-8")
+    changed = _non_trivial_change(source)
+    client = FakeOpenAIClientWithUsage(f"```cpp\n{changed}\n```", FakeUsage(120, 45))
+    operator = OpenAIGPT4oMiniMutationOperator(
+        ids,
+        max_retries=0,
+        client=client,
+        fitness_settings=test_config.fitness,
+        validation_settings=test_config.validation,
+    )
+
+    child = operator.mutate(
+        parent,
+        MutationContext(1, "island_1", tmp_path, source_suffix=".cpp"),
+    )
+
+    assert len(child.llm_calls) == 1
+    call = child.llm_calls[0]
+    assert call.prompt_tokens == 120
+    assert call.completion_tokens == 45
+    assert call.total_tokens == 165
+
+
+def test_openai_mutation_llm_call_has_no_tokens_when_response_has_no_usage(
+    tmp_path: Path, test_config: AppConfig
+) -> None:
+    """A response with no `usage` attribute (like the plain FakeResponse
+    used by other tests here) must leave the token fields as None rather
+    than crashing or silently recording zero."""
+    ids = IdFactory()
+    parent = _cpp_parent(tmp_path, ids)
+    source = Path(parent.source_path).read_text(encoding="utf-8")
+    changed = _non_trivial_change(source)
+    client = FakeOpenAIClient([f"```cpp\n{changed}\n```"])
+    operator = OpenAIGPT4oMiniMutationOperator(
+        ids,
+        max_retries=0,
+        client=client,
+        fitness_settings=test_config.fitness,
+        validation_settings=test_config.validation,
+    )
+
+    child = operator.mutate(
+        parent,
+        MutationContext(1, "island_1", tmp_path, source_suffix=".cpp"),
+    )
+
+    call = child.llm_calls[0]
+    assert call.prompt_tokens is None
+    assert call.completion_tokens is None
+    assert call.total_tokens is None
 
 
 def test_openai_mutation_rejects_verbatim_echo_as_not_meaningful(
@@ -677,6 +766,33 @@ def test_openai_crossover_merges_parents_and_logs_llm_calls(
     prompt = client.responses.inputs[0]
     assert "parent1" in prompt and "parent2" in prompt
     assert "fitness=0.0500" in prompt and "fitness=0.0900" in prompt
+
+
+def test_openai_crossover_records_token_usage_from_response(
+    tmp_path: Path, test_config: AppConfig
+) -> None:
+    ids = IdFactory()
+    parent1 = _cpp_individual_with_metrics(
+        tmp_path, ids, "parent1", fitness=0.05, node_expansions=45000.0, path_length=39.0, arrival_time=180.0,
+    )
+    parent2 = _cpp_individual_with_metrics(
+        tmp_path, ids, "parent2", fitness=0.09, node_expansions=38000.0, path_length=39.5, arrival_time=173.0,
+    )
+    source1 = Path(parent1.source_path).read_text(encoding="utf-8")
+    merged = _non_trivial_change(source1)
+    client = FakeOpenAIClientWithUsage(f"```cpp\n{merged}\n```", FakeUsage(300, 80))
+    operator = OpenAIGPT4oMiniCrossoverOperator(
+        ids, tmp_path, max_retries=1, client=client,
+        fitness_settings=test_config.fitness, validation_settings=test_config.validation,
+    )
+
+    child = operator.crossover(parent1, parent2)
+
+    assert len(child.llm_calls) == 1
+    call = child.llm_calls[0]
+    assert call.prompt_tokens == 300
+    assert call.completion_tokens == 80
+    assert call.total_tokens == 380
 
 
 def test_openai_crossover_rejects_verbatim_parent_copy_and_falls_back(
