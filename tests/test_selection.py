@@ -3,7 +3,13 @@ from __future__ import annotations
 import random
 
 from llm_gp.models import Individual
-from llm_gp.selection import roulette_select, select_parent_pair, select_survivors
+from llm_gp.selection import (
+    rank_select_parent_pair,
+    roulette_select,
+    select_parent_pair,
+    select_survivors,
+    truncation_select_survivors,
+)
 
 
 def make_individual(identifier: str, fitness: float) -> Individual:
@@ -56,3 +62,41 @@ def test_survivors_keep_elite_and_have_no_duplicates() -> None:
     assert candidates[-1].is_elite
     assert sum(item.is_elite for item in survivors) == 1
     assert all(item.selected_for_next_generation for item in survivors)
+
+
+def test_rank_select_parent_pair_pairs_adjacent_ranks_deterministically() -> None:
+    # fitness 0..9, so individual_id "i9" is rank 1 (best), "i8" rank 2, etc.
+    population = [make_individual(f"i{index}", float(index)) for index in range(10)]
+    pair0 = rank_select_parent_pair(population, 0)
+    pair1 = rank_select_parent_pair(population, 1)
+    assert {p.individual_id for p in pair0} == {"i9", "i8"}
+    assert {p.individual_id for p in pair1} == {"i7", "i6"}
+    # No rng involved: repeated calls on the same population must agree.
+    assert rank_select_parent_pair(population, 0) == pair0
+
+
+def test_rank_select_parent_pair_wraps_around_without_raising() -> None:
+    population = [make_individual(f"i{index}", float(index)) for index in range(4)]
+    # pair_index 2 would need rank 5 & 6, which don't exist in a 4-member
+    # population -- must wrap around (modulo population size) instead of
+    # raising an IndexError.
+    parent1, parent2 = rank_select_parent_pair(population, 2)
+    assert parent1.individual_id != parent2.individual_id
+
+
+def test_truncation_select_survivors_keeps_top_n_deterministically() -> None:
+    candidates = [make_individual(f"i{index:02d}", float(index)) for index in range(25)]
+    survivors = truncation_select_survivors(candidates, 10, 1)
+    assert len(survivors) == 10
+    assert len({item.individual_id for item in survivors}) == 10
+    # Top 10 by fitness are indices 15..24.
+    assert {item.individual_id for item in survivors} == {
+        f"i{index:02d}" for index in range(15, 25)
+    }
+    assert candidates[-1].is_elite
+    assert sum(item.is_elite for item in survivors) == 1
+    assert all(item.selected_for_next_generation for item in survivors)
+    # No rng involved: repeated calls on the same candidates must agree.
+    assert {item.individual_id for item in truncation_select_survivors(candidates, 10, 1)} == {
+        item.individual_id for item in survivors
+    }

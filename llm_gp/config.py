@@ -208,10 +208,10 @@ def _validate_config(config: AppConfig) -> None:
             raise ValueError("parent_pairs_per_island must be 5")
     if config.evolution.elite_count != 1:
         raise ValueError("elite_count must be 1")
-    if config.selection.parent_method != "roulette":
-        raise ValueError("parent_method must be roulette")
-    if config.selection.survivor_method != "roulette_without_replacement":
-        raise ValueError("survivor_method must be roulette_without_replacement")
+    if config.selection.parent_method not in ("roulette", "rank_pairing"):
+        raise ValueError("parent_method must be roulette or rank_pairing")
+    if config.selection.survivor_method not in ("roulette_without_replacement", "truncation"):
+        raise ValueError("survivor_method must be roulette_without_replacement or truncation")
     if not config.selection.avoid_same_parent_pair:
         raise ValueError("avoid_same_parent_pair must be true")
     if config.selection.epsilon <= 0 or not math.isfinite(config.selection.epsilon):

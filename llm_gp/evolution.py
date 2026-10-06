@@ -22,7 +22,13 @@ from .operators import (
     initial_cpp_source,
     initial_source,
 )
-from .selection import elite_sort_key, select_parent_pair, select_survivors
+from .selection import (
+    elite_sort_key,
+    rank_select_parent_pair,
+    select_parent_pair,
+    select_survivors,
+    truncation_select_survivors,
+)
 from .validation import validate_individual
 
 
@@ -175,17 +181,32 @@ class EvolutionEngine:
         self._persist_freshly_evaluated(all_individuals, results)# 適応度計算後に、評価結果(適応度込み)を1回だけデータベースへ書き込みます。
         self.database.commit()# ここまでのデータベース変更を確定します。
 
-    def generate_children(self, island: Island, generation: int) -> list[Individual]:# 指定された島で、1組の親から子個体を生成するメソッドです。
-        parent1, parent2 = select_parent_pair(# 島の集団から親を2個体選択します。
-            island.population, island.rng, self.config.selection.epsilon# 親選択関数へ次を渡します。島の個体集団,島専用の乱数生成器,選択時にゼロ除算などを防ぐ小さな値
-        )
+    def generate_children(
+        self, island: Island, generation: int, pair_index: int = 0
+    ) -> list[Individual]:# 指定された島で、1組の親から子個体を生成するメソッドです。
+        if self.config.selection.parent_method == "rank_pairing":
+            # Deterministic: no rng involved, so the same population always
+            # yields the same pairs in the same order (pair_index 0 -> rank
+            # 1 & 2, pair_index 1 -> rank 3 & 4, ...).
+            parent1, parent2 = rank_select_parent_pair(island.population, pair_index)
+        else:
+            parent1, parent2 = select_parent_pair(# 島の集団から親を2個体選択します。
+                island.population, island.rng, self.config.selection.epsilon# 親選択関数へ次を渡します。島の個体集団,島専用の乱数生成器,選択時にゼロ除算などを防ぐ小さな値
+            )
         child_c = self.crossover.crossover(parent1, parent2)# 親1と親2を交叉させ、子個体を生成します。
         self._set_child_metadata(
             child_c, island.name, generation, "crossover_only", parent1, parent2# 生成された子に、世代や親などの情報を設定します。
         )
 
         mutation = self.mutations[island.name]# 現在の島に対応した突然変異オペレータを取得します。
-        mutation_parent = island.rng.choice([parent1, parent2])# 親1または親2のどちらかをランダムに選びます。
+        if self.config.selection.parent_method == "rank_pairing":
+            # Deterministic: always mutate the higher-ranked parent. Compared
+            # via elite_sort_key rather than assuming parent1 is the better
+            # one, since rank_select_parent_pair's modulo wraparound can
+            # return the better-ranked individual as parent2.
+            mutation_parent = min(parent1, parent2, key=elite_sort_key)
+        else:
+            mutation_parent = island.rng.choice([parent1, parent2])# 親1または親2のどちらかをランダムに選びます。
         child_m = mutation.mutate(
             mutation_parent,
             MutationContext(
@@ -252,8 +273,8 @@ class EvolutionEngine:
         for island in self.islands:
             parents = list(island.population)
             children: list[Individual] = []
-            for _ in range(self.config.evolution.parent_pairs_per_island):
-                for child in self.generate_children(island, generation):
+            for pair_index in range(self.config.evolution.parent_pairs_per_island):
+                for child in self.generate_children(island, generation, pair_index):
                     generated += 1
                     self.total_generated += 1
                     children.append(child)
@@ -276,13 +297,22 @@ class EvolutionEngine:
             # Rescore parents alongside this generation's children so both
             # are ranked against the same min/max before selection.
             self._score_individuals(parents + children)
-            island.population = select_survivors(
-                parents + children,
-                self.config.evolution.population_size_per_island,
-                self.config.evolution.elite_count,
-                island.rng,
-                self.config.selection.epsilon,
-            )
+            if self.config.selection.survivor_method == "truncation":
+                # Deterministic: no rng involved, just keep the top
+                # population_size by fitness.
+                island.population = truncation_select_survivors(
+                    parents + children,
+                    self.config.evolution.population_size_per_island,
+                    self.config.evolution.elite_count,
+                )
+            else:
+                island.population = select_survivors(
+                    parents + children,
+                    self.config.evolution.population_size_per_island,
+                    self.config.evolution.elite_count,
+                    island.rng,
+                    self.config.selection.epsilon,
+                )
             self._persist_rescored(parents)
             self._persist_freshly_evaluated(
                 children, [results_by_id[child.individual_id] for child in children]

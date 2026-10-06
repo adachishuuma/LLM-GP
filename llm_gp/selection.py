@@ -53,6 +53,28 @@ def select_parent_pair(
     return parent1, parent2
 
 
+def rank_select_parent_pair(
+    population: list[Individual], pair_index: int
+) -> tuple[Individual, Individual]:
+    """Deterministic parent selection: no randomness. Sort the population by
+    fitness (ties broken by elite_sort_key, same tiebreak truncation_select_
+    survivors uses, so results are reproducible across runs of the same
+    data) and pair up adjacent ranks -- pair_index 0 gets rank 1 & 2,
+    pair_index 1 gets rank 3 & 4, and so on. Wraps around (modulo population
+    size) if parent_pairs_per_island * 2 exceeds the population size, so it
+    never raises for a valid config."""
+    if not population:
+        raise ValueError("Cannot select parents from an empty population")
+    ranked = sorted(population, key=elite_sort_key)
+    if len(ranked) == 1:
+        return ranked[0], ranked[0]
+    first_idx = (2 * pair_index) % len(ranked)
+    second_idx = (2 * pair_index + 1) % len(ranked)
+    if first_idx == second_idx:
+        second_idx = (second_idx + 1) % len(ranked)
+    return ranked[first_idx], ranked[second_idx]
+
+
 def elite_sort_key(individual: Individual) -> tuple[float, int, float, float, float, str]:
     def metric(value: float | None) -> float:
         return value if value is not None and math.isfinite(value) else math.inf
@@ -92,4 +114,30 @@ def select_survivors(
         chosen.selected_for_next_generation = True
         selected.append(chosen)
         remaining = [item for item in remaining if item.individual_id != chosen.individual_id]
+    return selected
+
+
+def truncation_select_survivors(
+    candidates: list[Individual],
+    population_size: int,
+    elite_count: int,
+) -> list[Individual]:
+    """Deterministic survivor selection: no randomness. Sort parents+children
+    by fitness (elite_sort_key, best first) and keep exactly the top
+    population_size -- the same rule select_survivors already uses for the
+    single elite, just extended to the whole next generation instead of
+    handing the rest to roulette_select."""
+    if population_size < 1 or elite_count != 1:
+        raise ValueError("The current specification requires one elite and a positive population")
+    unique = list({item.individual_id: item for item in candidates}.values())
+    if not unique:
+        return []
+    for item in unique:
+        item.is_elite = False
+        item.selected_for_next_generation = False
+    ranked = sorted(unique, key=elite_sort_key)
+    selected = ranked[:population_size]
+    selected[0].is_elite = True
+    for item in selected:
+        item.selected_for_next_generation = True
     return selected
