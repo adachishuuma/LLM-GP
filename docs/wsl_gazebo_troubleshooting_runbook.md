@@ -210,8 +210,17 @@ Windows 11のModern Standby(S0 Low Power Idle)は上記のスリープ設定を
   以下のように起動すると確実に動く:
   ```bash
   wsl -d Ubuntu-20.04 -- bash -lc \
-    "cd /mnt/c/Users/adachi/catkin_ws && nohup python3 -m llm_gp.main --config <config> > <log> 2>&1 & disown"
+    "cd /mnt/c/Users/adachi/catkin_ws && setsid nohup python3 -m llm_gp.main --config <config> > <log> 2>&1 < /dev/null & disown"
   ```
+- **起動には必ず`setsid`を付ける**。`nohup ... & disown`だけだと、起動に使った
+  `bash -lc`のシェルが終了した瞬間に、実行中だった子プロセス(最初の個体の
+  `catkin build`など)へ`SIGHUP`が届くことがある。実際に2026-10-06の決定的
+  30世代実験の初回起動で、`ind_000001`の1回目のビルドが
+  `Error running link command: SIGHUP`で失敗した。1回でも失敗すると
+  その個体は3回中全成功の条件を満たせず脱落扱いになり、環境起因で結果が
+  歪む。`setsid`で新しいセッションとして起動し、標準入力も`< /dev/null`で
+  切り離せば防げる。ビルドログ(`ros_logs/*_repetition_1.build.log`)に
+  `SIGHUP`が出ていないかを起動直後に確認するとよい。
 - Git BashなどMSYS系シェルから`wsl.exe`に`/mnt/c/...`のようなPOSIXパスを
   引数で渡すと、MSYSが勝手にWindowsパスへ変換して壊すことがある。
   `MSYS_NO_PATHCONV=1`を頭に付けて回避する。

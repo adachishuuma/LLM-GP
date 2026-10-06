@@ -70,7 +70,7 @@ fitness正規化方式・母集団構成・選択方式・LLM設定は5gen実験
 Windows側のPowerShellから(WSLに入っている状態からは実行しないこと):
 
 ```powershell
-.\scripts\restart_wsl_and_run.ps1 -Command "cd /mnt/c/Users/adachi/catkin_ws && nohup python3 -m llm_gp.main --config config/ros_gazebo_lattice_fork_minmax_30gen.yaml > gp_minmax_30gen.log 2>&1 & disown"
+.\scripts\restart_wsl_and_run.ps1 -Command "cd /mnt/c/Users/adachi/catkin_ws && setsid nohup python3 -m llm_gp.main --config config/ros_gazebo_lattice_fork_minmax_30gen.yaml > gp_minmax_30gen.log 2>&1 < /dev/null & disown"
 ```
 
 既存のWSLセッション内でそのまま実行する場合:

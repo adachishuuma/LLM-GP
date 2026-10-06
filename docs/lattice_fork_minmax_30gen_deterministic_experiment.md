@@ -92,7 +92,7 @@ wsl --shutdown
 5秒ほど待ってから:
 
 ```powershell
-wsl -d Ubuntu-20.04 -- bash -lc "cd /mnt/c/Users/adachi/catkin_ws && nohup python3 -m llm_gp.main --config config/ros_gazebo_lattice_fork_minmax_30gen_deterministic.yaml > gp_minmax_30gen_deterministic.log 2>&1 & disown"
+wsl -d Ubuntu-20.04 -- bash -lc "cd /mnt/c/Users/adachi/catkin_ws && setsid nohup python3 -m llm_gp.main --config config/ros_gazebo_lattice_fork_minmax_30gen_deterministic.yaml > gp_minmax_30gen_deterministic.log 2>&1 < /dev/null & disown"
 ```
 
 起動後は`pgrep -af llm_gp.main`と新しい`run_<timestamp>`ディレクトリの
