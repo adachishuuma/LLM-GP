@@ -1,0 +1,97 @@
+evolution:
+  # Fixed-start/fixed-goal variant of ros_gazebo_lattice_fork_minmax_30gen.yaml.
+  # That config randomly sampled a fresh goal x/y every repetition
+  # (goal_x_range/goal_y_range), which turned out to let individuals overfit
+  # to whichever few random goals they happened to be evaluated against
+  # during the GP run (see docs/lattice_fork_minmax_30gen_checkpoint_
+  # verification_report.md -- path_length/arrival_time looked improved
+  # during the run but were actually worse or unchanged once re-tested
+  # against a fresh random-goal sample). This config removes that
+  # confounder entirely: start_pose was already fixed, and goal_x_range/
+  # goal_y_range are omitted below so every repetition of every individual
+  # targets the exact same fixed_goal. Same map/population/generations
+  # otherwise.
+  smoke_mode: true
+  max_generations: 30
+  population_size_per_island: 10
+  parent_pairs_per_island: 2
+  elite_count: 1
+
+islands:
+  # Islands intentionally disabled (single population) for this experiment
+  # so fitness normalization has one unambiguous generation-wide min/max
+  # instead of needing a per-island-vs-global-scope decision.
+  count: 1
+  names: [main]
+
+selection:
+  parent_method: roulette
+  survivor_method: roulette_without_replacement
+  epsilon: 1.0e-9
+  avoid_same_parent_pair: true
+
+migration:
+  # Unused with a single island (ring migration is a same-island no-op),
+  # kept at the values config validation requires.
+  interval: 10
+  migrants_per_island: 1
+  migrant_selection: best
+  topology: ring
+  reevaluate_migrants: false
+
+fitness:
+  # Fitness is normalized against each generation's own observed min/max
+  # (see llm_gp/fitness.py's GenerationMetricStats) rather than against
+  # fixed reference constants, so planning_reference/path_reference/
+  # arrival_reference/expansion_reference below are no longer used to score
+  # individuals -- they are kept only because FitnessSettings/operators.py's
+  # LLM-prompt metric-ratio text still read them, and because config loading
+  # requires the keys to be present.
+  planning_weight: 0.33
+  path_weight: 0.34
+  arrival_weight: 0.33
+  planning_reference: 1.0
+  path_reference: 41.0
+  arrival_reference: 200.0
+  failure_fitness: 0.0
+  expansion_reference: 45000.0
+
+validation:
+  max_repair_attempts: 1
+  build_timeout_seconds: 180
+  forbid_dwa_changes: true
+
+evaluation:
+  evaluator_type: ros_gazebo
+  repetitions_per_goal: 3
+  timeout_seconds: 200
+  # No goal_x_range/goal_y_range here (unlike the randomized-goal config) --
+  # every one of the repetitions_per_goal repetitions targets exactly this
+  # single point every time, for every individual across all generations.
+  fixed_goal: [16.5, 2.0, 0.0]
+  ros_gazebo:
+    wsl_distribution: Ubuntu-20.04
+    workspace: /home/adachi/catkin_ws_2024_12_2/catkin_ws
+    launch_file: src/dwa_local_planner/launch/astar_dwa_lattice_fork.launch
+    package_name: global_planner
+    candidate_target: src/global_planner/src/rastar.cpp
+    robot_model: burger
+    gazebo_model_name: turtlebot3_burger
+    start_pose: [-11.8, 2.0, -0.00143]
+    startup_timeout_seconds: 60
+    plan_topic: /move_base/GlobalPlanner/plan
+    node_expansions_topic: /move_base/GlobalPlanner/node_expansions
+
+llm:
+  provider: openai
+  model: gpt-5.6-luna
+  fallback_to_mock: true
+
+database:
+  path: experiment_results/lattice_fork_minmax_30gen_fixed_goal/roulette_ros_lattice_fork_minmax_30gen_fixed_goal.db
+
+output:
+  source_directory: experiment_results/lattice_fork_minmax_30gen_fixed_goal/individual_sources
+  generation_csv: experiment_results/lattice_fork_minmax_30gen_fixed_goal/generation_summary.csv
+
+random_seed: 42
