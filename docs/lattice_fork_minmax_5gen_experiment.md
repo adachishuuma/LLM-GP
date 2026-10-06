@@ -74,7 +74,7 @@ Windows側のPowerShellから(WSLに入っている状態からは実行しな�
 `wsl --shutdown`が今開いているセッション自体を巻き込んで落ちるため):
 
 ```powershell
-.\scripts\restart_wsl_and_run.ps1 -Command "cd /mnt/c/Users/adachi/catkin_ws && nohup python3 -m llm_gp.main --config config/ros_gazebo_lattice_fork_minmax_5gen.yaml > gp_minmax_5gen.log 2>&1 & disown"
+.\scripts\restart_wsl_and_run.ps1 -Command "cd /mnt/c/Users/adachi/catkin_ws && setsid nohup python3 -m llm_gp.main --config config/ros_gazebo_lattice_fork_minmax_5gen.yaml > gp_minmax_5gen.log 2>&1 < /dev/null & disown"
 ```
 
 WSLを一度完全にシャットダウンしてから起動するため、前回実験の残存プロセス

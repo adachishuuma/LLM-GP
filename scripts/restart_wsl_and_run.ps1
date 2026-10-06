@@ -28,7 +28,7 @@
 
 .EXAMPLE
   # Full 10-generation GP run, backgrounded so it survives closing the window
-  .\scripts\restart_wsl_and_run.ps1 -Command "cd /mnt/c/Users/adachi/catkin_ws && nohup python3 -m llm_gp.main --config config/ros_gazebo_lattice_fork_10gen.yaml > gp_10gen.log 2>&1 & disown"
+  .\scripts\restart_wsl_and_run.ps1 -Command "cd /mnt/c/Users/adachi/catkin_ws && setsid nohup python3 -m llm_gp.main --config config/ros_gazebo_lattice_fork_10gen.yaml > gp_10gen.log 2>&1 < /dev/null & disown"
 #>
 param(
     [Parameter(Mandatory = $true)]
